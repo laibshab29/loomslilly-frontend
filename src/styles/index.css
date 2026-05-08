@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Imports */
+@import './fonts.css';
+@import './theme.css';
+
+/* --- Custom Animations --- */
+@keyframes caret-blink {
+  0%, 50%, 100% { opacity: 1; }
+  25%, 75% { opacity: 0; }
+}
+
+.animate-caret-blink {
+  animation: caret-blink 1s infinite;
+}
