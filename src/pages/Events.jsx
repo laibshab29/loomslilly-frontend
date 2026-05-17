@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Calendar, MapPin, Users, Trash2, ExternalLink } from "lucide-react";
+import { Calendar, MapPin, Users, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useEvents } from "../context/EventContext";
@@ -77,7 +77,6 @@ export function Events() {
             Join us for workshops, exhibitions, and community gatherings
           </p>
 
-          {/* UPLOAD BUTTON */}
           <div className="mt-4">
             {isGuest ? (
               <Link
@@ -112,6 +111,11 @@ export function Events() {
             const slotsLeft = getSlotsLeft(event.id);
             const emoji = TYPE_EMOJI[event.type] || "✨";
 
+            // 🔥 Priority: first picture → first image brochure → emoji
+            const cardImage = event.pictures?.length > 0
+              ? event.pictures[0]
+              : event.brochures?.find((b) => typeof b === "string" && b.startsWith("data:image")) ?? null;
+
             return (
               <motion.div
                 key={event.id}
@@ -122,19 +126,26 @@ export function Events() {
                 className="rounded-[20px] bg-[#FFF6F8]/90 backdrop-blur-sm border-2 border-[#7A6C9D]/20 overflow-hidden shadow-lg"
               >
                 {/* BANNER */}
-                <div className="h-32 bg-gradient-to-br from-[#F6C1CC] to-[#C8B6E2] flex items-center justify-center text-5xl relative">
-                  {emoji}
-                  {/* OWNER DELETE */}
+                <div
+                  onClick={() => navigate(`/events/${event.id}`)}
+                  className="h-32 bg-gradient-to-br from-[#F6C1CC] to-[#C8B6E2] flex items-center justify-center text-5xl relative cursor-pointer"
+                >
+                  {cardImage ? (
+                    <img src={cardImage} alt={event.name} className="w-full h-full object-cover" />
+                  ) : (
+                    emoji
+                  )}
+
                   {isOwner && (
                     <button
-                      onClick={() => setDeleteTarget(event.id)}
+                      onClick={(e) => { e.stopPropagation(); setDeleteTarget(event.id); }}
                       className="absolute top-3 right-3 p-2 rounded-full bg-white/60 hover:bg-white/90 transition-all"
                       title="Delete event"
                     >
                       <Trash2 className="w-4 h-4 text-[#FF8FA3]" />
                     </button>
                   )}
-                  {/* FULL BADGE */}
+
                   {full && (
                     <span className="absolute top-3 left-3 px-3 py-1 rounded-full bg-red-500 text-white text-xs font-medium">
                       Full
@@ -142,7 +153,11 @@ export function Events() {
                   )}
                 </div>
 
-                <div className="p-6">
+                {/* TITLE + DETAILS */}
+                <div
+                  onClick={() => navigate(`/events/${event.id}`)}
+                  className="px-6 pt-6 cursor-pointer"
+                >
                   <div className="flex items-start justify-between gap-2 mb-1">
                     <h3 className="text-xl text-[#2E2A4A]">{event.name}</h3>
                     <span className="text-xs px-2 py-1 rounded-full bg-[#C8B6E2]/30 text-[#7A6C9D] flex-shrink-0">
@@ -172,21 +187,10 @@ export function Events() {
                       </span>
                     </div>
                   </div>
+                </div>
 
-                  {/* EXTERNAL LINK */}
-                  {event.link && (
-                    <a
-                      href={event.link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-1 text-sm text-[#C8B6E2] hover:text-[#FF8FA3] transition-colors mb-4"
-                    >
-                      <ExternalLink className="w-3 h-3" />
-                      More info
-                    </a>
-                  )}
-
-                  {/* REGISTER BUTTON */}
+                {/* REGISTER BUTTON */}
+                <div className="px-6 pb-6">
                   {full ? (
                     <div className="w-full py-3 rounded-full bg-gray-200 text-gray-400 text-center text-sm cursor-not-allowed">
                       Registration Closed
@@ -194,6 +198,7 @@ export function Events() {
                   ) : isGuest ? (
                     <Link
                       to="/signup"
+                      onClick={(e) => e.stopPropagation()}
                       className="block w-full py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] text-center hover:scale-105 transition-all"
                     >
                       Sign Up to Register
@@ -201,6 +206,7 @@ export function Events() {
                   ) : (
                     <Link
                       to={`/events/register?eventId=${event.id}`}
+                      onClick={(e) => e.stopPropagation()}
                       className="block w-full py-3 rounded-full bg-[#FF8FA3] text-white text-center hover:scale-105 transition-all shadow-md"
                     >
                       Register Now

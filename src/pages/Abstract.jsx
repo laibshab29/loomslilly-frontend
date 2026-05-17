@@ -1,25 +1,28 @@
+import { useState, useMemo } from "react";
 import { ProductCard } from "../components/ProductCard";
 import { motion } from "framer-motion";
 import { useProducts } from "../context/ProductContext";
 import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
+import { SortBar, sortProducts } from "../components/SortBar";
+
 export function Abstract() {
   const { products } = useProducts();
   const { isSeller } = useAuth();
   const navigate = useNavigate();
-  const filtered = products.filter(
-  (p) =>
-    p.type?.toLowerCase() === "abstract"
-);
+  const [sort, setSort] = useState("recent");
+
+  const abstractProducts = useMemo(() => {
+    const filtered = products.filter((p) => p.type?.toLowerCase() === "abstract");
+    return sortProducts(filtered, sort);
+  }, [products, sort]);
 
   return (
     <div className="min-h-screen py-12 px-4 lg:px-20">
       <div className="max-w-[1440px] mx-auto">
 
         <motion.div className="text-center mb-16 relative">
-          
           <h1 className="text-5xl lg:text-7xl mb-4">
-            
             <span style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3", textShadow: "0 0 30px rgba(255, 143, 163, 0.6)" }}>
               Abstract
             </span>
@@ -27,7 +30,6 @@ export function Abstract() {
               {" "}Art
             </span>
           </h1>
-          
           <p className="text-xl text-[#FFF6F8]">
             Modern supplies for contemporary abstract art
           </p>
@@ -35,8 +37,8 @@ export function Abstract() {
             <div className="mt-8 flex justify-center">
               <button
                 onClick={() => navigate("/upload")}
-                className="px-5 py-2 rounded-full bg-[#FF8FA3] text-white text-lg 
-                hover:bg-[#FF8FA3]/90 hover:scale-105 transition-all duration-300 
+                className="px-5 py-2 rounded-full bg-[#FF8FA3] text-white text-lg
+                hover:bg-[#FF8FA3]/90 hover:scale-105 transition-all duration-300
                 shadow-[0_8px_25px_rgba(255,143,163,0.4)]"
                 style={{ fontFamily: "Fredoka, sans-serif" }}
               >
@@ -46,16 +48,22 @@ export function Abstract() {
           )}
         </motion.div>
 
-        {filtered.length > 0 ? (
+        <SortBar
+          value={sort}
+          onChange={setSort}
+          options={["recent", "priceLow", "priceHigh", "mostLiked"]}
+        />
+
+        {abstractProducts.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {filtered.map((product) => (
+            {abstractProducts.map((product) => (
               <ProductCard key={product.id} {...product} />
             ))}
           </div>
         ) : (
           <div className="text-center py-20">
             <span className="text-2xl" style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3", textShadow: "0 0 30px rgba(255, 143, 163, 0.6)" }}>
-            No abstract art supplies available yet.
+              No abstract art supplies available yet.
             </span>
           </div>
         )}

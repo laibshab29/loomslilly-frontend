@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
@@ -30,22 +30,33 @@ const TYPES = [
 const inputStyle =
   "w-full px-4 py-3 rounded-[16px] bg-[#F6C1CC]/20 border-2 border-[#7A6C9D]/20 outline-none focus:border-[#FF8FA3] text-[#2E2A4A] placeholder:text-[#7A6C9D] transition-colors";
 
+// Format seconds → "MM:SS"
+function formatDuration(seconds) {
+  if (!seconds || isNaN(seconds) || !isFinite(seconds)) return "";
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 export function UploadTutorial() {
   const { user, isGuest } = useAuth();
   const { addTutorial } = useTutorials();
   const navigate = useNavigate();
+  const videoRef = useRef(null);
 
   const [form, setForm] = useState({
     title: "",
     details: "",
     type: "",
-    duration: "",
+    duration: "",       // auto-filled for video, manual fallback
     mediaType: "image",
     media: [],
+    youtubeLink: "",
   });
 
   const [notification, setNotification] = useState(null);
   const [previews, setPreviews] = useState([]);
+  const [durationDetected, setDurationDetected] = useState(false);
 
   const showNotification = (message, type = "error") => {
     setNotification({ message, type });
@@ -86,9 +97,19 @@ export function UploadTutorial() {
     );
 
     Promise.all(readers).then((base64s) => {
-      setForm((prev) => ({ ...prev, media: base64s }));
+      setForm((prev) => ({ ...prev, media: base64s, duration: "" }));
       setPreviews(base64s);
+      setDurationDetected(false);
     });
+  };
+
+  // Auto-read video duration once metadata loads
+  const handleVideoMetadata = (e) => {
+    const duration = formatDuration(e.target.duration);
+    if (duration) {
+      setForm((prev) => ({ ...prev, duration }));
+      setDurationDetected(true);
+    }
   };
 
   const handleSubmit = () => {
@@ -104,8 +125,8 @@ export function UploadTutorial() {
       showNotification("Please select a type of art or craft.", "error");
       return;
     }
-    if (form.media.length === 0) {
-      showNotification("Please upload at least one image or video.", "error");
+    if (form.media.length === 0 && !form.youtubeLink.trim()) {
+      showNotification("Please upload media or provide a video link.", "error");
       return;
     }
 
@@ -193,18 +214,29 @@ export function UploadTutorial() {
             />
           </div>
 
-          {/* DURATION — optional */}
+          {/* DURATION — auto for video, manual override */}
           <div className="mb-6">
             <label className="block text-[#7A6C9D] mb-2">
               Duration{" "}
-              <span className="text-xs text-[#C8B6E2]">(optional, e.g. 15 min)</span>
+              <span className="text-xs text-[#C8B6E2]">
+                {form.mediaType === "video"
+                  ? "(auto-detected from video)"
+                  : "(optional, e.g. 15:00)"}
+              </span>
             </label>
-            <input
-              placeholder="e.g. 20 min"
-              value={form.duration}
-              onChange={(e) => setForm({ ...form, duration: e.target.value })}
-              className={inputStyle}
-            />
+            <div className="relative">
+              <input
+                placeholder="e.g. 20:00"
+                value={form.duration}
+                onChange={(e) => { setForm({ ...form, duration: e.target.value }); setDurationDetected(false); }}
+                className={inputStyle}
+              />
+              {durationDetected && (
+                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-green-500 font-medium">
+                  ✓ auto-detected
+                </span>
+              )}
+            </div>
           </div>
 
           {/* MEDIA TYPE */}
@@ -217,7 +249,11 @@ export function UploadTutorial() {
                 <button
                   key={mt}
                   type="button"
-                  onClick={() => setForm({ ...form, mediaType: mt, media: [] })}
+                  onClick={() => {
+                    setForm({ ...form, mediaType: mt, media: [], duration: "" });
+                    setPreviews([]);
+                    setDurationDetected(false);
+                  }}
                   className={`px-6 py-2 rounded-full capitalize transition-all ${
                     form.mediaType === mt
                       ? "bg-[#FF8FA3] text-white"
@@ -231,10 +267,10 @@ export function UploadTutorial() {
           </div>
 
           {/* MEDIA UPLOAD */}
-          <div className="mb-8">
+          <div className="mb-6">
             <label className="block text-[#7A6C9D] mb-2">
               Upload {form.mediaType === "video" ? "Video" : "Images"}{" "}
-              <span className="text-[#FF8FA3]">*</span>
+              <span className="text-xs text-[#C8B6E2]">(optional if you provide a link below)</span>
             </label>
             <input
               type="file"
@@ -258,14 +294,30 @@ export function UploadTutorial() {
               </div>
             )}
 
-            {/* VIDEO PREVIEW */}
+            {/* VIDEO PREVIEW — onLoadedMetadata auto-fills duration */}
             {previews.length > 0 && form.mediaType === "video" && (
               <video
+                ref={videoRef}
                 src={previews[0]}
                 controls
+                onLoadedMetadata={handleVideoMetadata}
                 className="mt-4 w-full rounded-[16px]"
               />
             )}
+          </div>
+
+          {/* YOUTUBE / PLATFORM LINK — optional */}
+          <div className="mb-8">
+            <label className="block text-[#7A6C9D] mb-2">
+              Video Link{" "}
+              <span className="text-xs text-[#C8B6E2]">(optional — YouTube, Vimeo, etc.)</span>
+            </label>
+            <input
+              placeholder="https://youtube.com/watch?v=..."
+              value={form.youtubeLink}
+              onChange={(e) => setForm({ ...form, youtubeLink: e.target.value })}
+              className={inputStyle}
+            />
           </div>
 
           {/* SUBMIT */}

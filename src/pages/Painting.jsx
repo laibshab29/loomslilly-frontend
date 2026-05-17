@@ -1,16 +1,22 @@
+import { useState, useMemo } from "react";
 import { ProductCard } from "../components/ProductCard";
 import { motion } from "framer-motion";
 import { useProducts } from "../context/ProductContext";
 import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
+import { SortBar, sortProducts } from "../components/SortBar";
+
 export function Painting() {
   const { products } = useProducts();
-const { isSeller } = useAuth();
-  const filtered = products.filter(
-  (p) =>
-    p.type?.toLowerCase() === "painting"
-);
-const navigate = useNavigate();
+  const { isSeller } = useAuth();
+  const navigate = useNavigate();
+  const [sort, setSort] = useState("recent");
+
+  const paintingProducts = useMemo(() => {
+    const filtered = products.filter((p) => p.type?.toLowerCase() === "painting");
+    return sortProducts(filtered, sort);
+  }, [products, sort]);
+
   return (
     <div className="min-h-screen py-12 px-4 lg:px-20">
       <div className="max-w-[1440px] mx-auto">
@@ -24,7 +30,6 @@ const navigate = useNavigate();
               {" "}Collection
             </span>
           </h1>
-
           <p className="text-xl text-[#FFF6F8]">
             Quality paints and supplies for every technique
           </p>
@@ -32,9 +37,7 @@ const navigate = useNavigate();
             <div className="mt-8 flex justify-center">
               <button
                 onClick={() => navigate("/upload")}
-                className="px-5 py-2 rounded-full bg-[#FF8FA3] text-white text-lg 
-                hover:bg-[#FF8FA3]/90 hover:scale-105 transition-all duration-300 
-                shadow-[0_8px_25px_rgba(255,143,163,0.4)]"
+                className="px-5 py-2 rounded-full bg-[#FF8FA3] text-white text-lg hover:bg-[#FF8FA3]/90 hover:scale-105 transition-all duration-300 shadow-[0_8px_25px_rgba(255,143,163,0.4)]"
                 style={{ fontFamily: "Fredoka, sans-serif" }}
               >
                 Upload Product
@@ -43,16 +46,19 @@ const navigate = useNavigate();
           )}
         </motion.div>
 
-        {filtered.length > 0 ? (
+        <SortBar value={sort} onChange={setSort} options={["recent", "priceLow", "priceHigh", "mostLiked"]} />
+
+        {/* 🔥 Fixed: was rendering stale `filtered`, now renders sorted `paintingProducts` */}
+        {paintingProducts.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {filtered.map((product) => (
+            {paintingProducts.map((product) => (
               <ProductCard key={product.id} {...product} />
             ))}
           </div>
         ) : (
-          <div className="text-center py-20 ">
-             <span className="text-2xl" style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3", textShadow: "0 0 30px rgba(255, 143, 163, 0.6)" }}>
-            No painting supplies available yet.
+          <div className="text-center py-20">
+            <span className="text-2xl" style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3", textShadow: "0 0 30px rgba(255, 143, 163, 0.6)" }}>
+              No painting supplies available yet.
             </span>
           </div>
         )}

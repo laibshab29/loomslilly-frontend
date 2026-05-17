@@ -8,9 +8,8 @@ import {
 
 const ProductContext = createContext();
 
-// 🔥 Strip images before saving to localStorage — they blow the quota
 const stripImages = (products) =>
-  products.map(({ image, ...rest }) => rest);
+  products.map(({ image, images, ...rest }) => rest);
 
 const DEFAULT_PRODUCTS = [
   {
@@ -24,6 +23,8 @@ const DEFAULT_PRODUCTS = [
     likes: 12,
     createdAt: Date.now(),
     sellerId: 999,
+    details: "A beautiful bundle of high-quality yarn perfect for crochet projects.",
+    delivery: "3-5 days",
   },
   {
     id: 2,
@@ -36,6 +37,8 @@ const DEFAULT_PRODUCTS = [
     likes: 5,
     createdAt: Date.now(),
     sellerId: 998,
+    details: "Professional grade paint set with 24 vibrant colors.",
+    delivery: "2-4 days",
   },
   {
     id: 3,
@@ -47,6 +50,8 @@ const DEFAULT_PRODUCTS = [
     likes: 20,
     createdAt: Date.now(),
     sellerId: 997,
+    details: "Complete embroidery kit with needles, hoops, and thread.",
+    delivery: "3-7 days",
   },
 ];
 
@@ -79,7 +84,6 @@ const DEFAULT_DEALS = [
 ];
 
 export function ProductProvider({ children }) {
-
   const [products, setProducts] = useState(() => {
     try {
       const saved = localStorage.getItem("products");
@@ -107,11 +111,16 @@ export function ProductProvider({ children }) {
     }
   });
 
-  // 🔥 In-memory image store — never touches localStorage
-  // { [productId]: base64string }
-  const imageStoreRef = useRef({});
+  const [likedDealsMap, setLikedDealsMap] = useState(() => {
+    try {
+      const saved = localStorage.getItem("likedDealsMap");
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
 
-  // ─── PERSIST (images stripped out) ───────────────────────────
+  const imageStoreRef = useRef({});
 
   useEffect(() => {
     try {
@@ -137,28 +146,45 @@ export function ProductProvider({ children }) {
     }
   }, [likedMap]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem("likedDealsMap", JSON.stringify(likedDealsMap));
+    } catch (e) {
+      console.warn("localStorage likedDealsMap save failed:", e);
+    }
+  }, [likedDealsMap]);
+
   // ─── IMAGE HELPERS ────────────────────────────────────────────
+  const setProductImages = (productId, base64Array) => {
+    imageStoreRef.current[productId] = base64Array;
+  };
+
+  const getProductImages = (productId) => {
+    return imageStoreRef.current[productId] ?? [];
+  };
 
   const setProductImage = (productId, base64) => {
-    imageStoreRef.current[productId] = base64;
+    imageStoreRef.current[productId] = [base64];
   };
 
   const getProductImage = (productId) => {
-    return imageStoreRef.current[productId] ?? null;
+    const imgs = imageStoreRef.current[productId];
+    return imgs?.[0] ?? null;
   };
 
-  // Attach in-memory images back onto products for all consumers
   const productsWithImages = products.map((p) => ({
     ...p,
-    image: imageStoreRef.current[p.id] ?? p.image ?? null,
+    images: imageStoreRef.current[p.id] ?? [],
+    image: imageStoreRef.current[p.id]?.[0] ?? p.image ?? null,
   }));
 
   // ─── PRODUCT ACTIONS ──────────────────────────────────────────
-
   const addProduct = (product, user) => {
     const id = Date.now();
 
-    if (product.image) {
+    if (product.images && product.images.length > 0) {
+      setProductImages(id, product.images);
+    } else if (product.image) {
       setProductImage(id, product.image);
     }
 
@@ -167,6 +193,7 @@ export function ProductProvider({ children }) {
       {
         ...product,
         image: null,
+        images: [],
         id,
         createdAt: Date.now(),
         sellerId: user.id,
@@ -182,34 +209,37 @@ export function ProductProvider({ children }) {
   };
 
   const updateProduct = (id, updatedData) => {
-    if (updatedData.image) {
+    if (updatedData.images?.length > 0) {
+      setProductImages(id, updatedData.images);
+    } else if (updatedData.image) {
       setProductImage(id, updatedData.image);
     }
 
     setProducts((prev) =>
       prev.map((product) =>
         product.id === id
-          ? { ...product, ...updatedData, image: null }
+          ? { ...product, ...updatedData, image: null, images: [] }
           : product
       )
     );
   };
 
+  // 🔥 Updated: Negative quantities = stock restoration (used on order cancel)
   const reduceStock = (cartItems) => {
     setProducts((prev) =>
       prev.map((product) => {
         const cartItem = cartItems.find((item) => item.id === product.id);
         if (!cartItem) return product;
+        const newStock = product.stock - cartItem.quantity;
         return {
           ...product,
-          stock: Math.max(0, product.stock - cartItem.quantity),
+          stock: Math.max(0, newStock),
         };
       })
     );
   };
 
-  // ─── LIKES ────────────────────────────────────────────────────
-
+  // ─── PRODUCT LIKES ────────────────────────────────────────────
   const toggleLike = (productId, userId) => {
     const userKey = String(userId ?? "guest");
     const currentLiked = likedMap[userKey] || [];
@@ -239,8 +269,26 @@ export function ProductProvider({ children }) {
     return (likedMap[userKey] || []).includes(productId);
   };
 
-  // ─── DEAL ACTIONS ─────────────────────────────────────────────
+  // ─── DEAL LIKES ───────────────────────────────────────────────
+  const toggleDealLike = (dealId, userId) => {
+    const userKey = String(userId ?? "guest");
+    const currentLiked = likedDealsMap[userKey] || [];
+    const alreadyLiked = currentLiked.includes(dealId);
 
+    setLikedDealsMap((prev) => ({
+      ...prev,
+      [userKey]: alreadyLiked
+        ? currentLiked.filter((id) => id !== dealId)
+        : [...currentLiked, dealId],
+    }));
+  };
+
+  const isDealLikedByUser = (dealId, userId) => {
+    const userKey = String(userId ?? "guest");
+    return (likedDealsMap[userKey] || []).includes(dealId);
+  };
+
+  // ─── DEAL ACTIONS ─────────────────────────────────────────────
   const createDeal = (dealData, user) => {
     setDeals((prev) => [
       ...prev,
@@ -260,6 +308,39 @@ export function ProductProvider({ children }) {
     );
   };
 
+  const getDealsForProduct = (productId) => {
+    return deals.filter((d) =>
+      d.products?.some((p) => p.id === productId)
+    );
+  };
+
+  const getDealsForSeller = (sellerId) => {
+    if (!sellerId) return [];
+    return deals.filter((d) => d.sellerId === Number(sellerId));
+  };
+
+  // ─── STOCK ALERT HELPERS ──────────────────────────────────────
+  const getLowStockProducts = (sellerId, threshold = 20) => {
+    if (!sellerId) return [];
+    return products.filter(
+      (p) => p.sellerId === sellerId && p.stock > 0 && p.stock <= threshold
+    );
+  };
+
+  const getCriticalStockProducts = (sellerId, threshold = 10) => {
+    if (!sellerId) return [];
+    return products.filter(
+      (p) => p.sellerId === sellerId && p.stock > 0 && p.stock <= threshold
+    );
+  };
+
+  const getOutOfStockProducts = (sellerId) => {
+    if (!sellerId) return [];
+    return products.filter(
+      (p) => p.sellerId === sellerId && p.stock === 0
+    );
+  };
+
   return (
     <ProductContext.Provider
       value={{
@@ -274,7 +355,15 @@ export function ProductProvider({ children }) {
         reduceStock,
         toggleLike,
         isLikedByUser,
+        toggleDealLike,
+        isDealLikedByUser,
         getProductImage,
+        getProductImages,
+        getDealsForProduct,
+        getDealsForSeller,
+        getLowStockProducts,
+        getCriticalStockProducts,
+        getOutOfStockProducts,
       }}
     >
       {children}

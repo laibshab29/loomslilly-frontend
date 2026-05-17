@@ -1,157 +1,342 @@
 import { motion } from "framer-motion";
 import { useState } from "react";
-import { ShoppingBag, Store, Users, Eye, EyeOff } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { ShoppingBag, Store, Users, Eye, EyeOff, Mail, RefreshCw, Smartphone } from "lucide-react";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
+const sanitizePhone = (value) => {
+  let result = "";
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (ch === "+" && i === 0) { result += ch; continue; }
+    if (/\d/.test(ch)) { result += ch; continue; }
+  }
+  return result;
+};
+
+const validatePhone = (value) => {
+  if (!value) return "";
+  if (/[^+\d]/.test(value)) return "Only digits and a leading + are allowed.";
+  if (value.indexOf("+") > 0) return "The + symbol can only appear at the start.";
+  const digits = value.replace("+", "");
+  if (digits.length < 9) return "Phone number is too short (minimum 9 digits).";
+  if (digits.length > 12) return "Phone number is too long (maximum 12 digits).";
+  if (value.startsWith("+") && !value.startsWith("+92"))
+    return "International format must start with +92.";
+  if (!value.startsWith("+") && !digits.startsWith("0"))
+    return "Local numbers must start with 0 (e.g. 03001234567).";
+  return "";
+};
+
+const validateContactEmail = (value) => {
+  if (!value) return "";
+  if (!value.includes("@")) return "Email must contain an @ symbol.";
+  const [local, domain] = value.split("@");
+  if (!local) return "Email is missing the part before @.";
+  if (!domain || !domain.includes(".")) return "Email must have a valid domain (e.g. gmail.com).";
+  if (domain.startsWith(".") || domain.endsWith("."))
+    return "Domain cannot start or end with a dot.";
+  return "";
+};
+
+function generateVerificationCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
 export function SignUp() {
-  const { login, validateEmail } = useAuth();
+  const { login, register, preRegister, validateEmail } = useAuth();
+  const navigate = useNavigate();
 
   const [searchParams] = useSearchParams();
   const mode = searchParams.get("mode") === "login" ? "login" : "signup";
 
   const [accountType, setAccountType] = useState(null);
-  const [submitted, setSubmitted] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
   const [formData, setFormData] = useState({
     name: "",
     email: "",
     password: "",
+    phone: "",
+    contactEmail: "",
+    jazzcashPhone: "",
+    easypaisaPhone: "",
   });
 
   const [errors, setErrors] = useState({});
   const [error, setError] = useState(null);
 
+  const [verificationStep, setVerificationStep] = useState(false);
+  const [verificationCode, setVerificationCode] = useState("");
+  const [enteredCode, setEnteredCode] = useState("");
+  const [verifyError, setVerifyError] = useState("");
+  const [resendCooldown, setResendCooldown] = useState(0);
+
   const inputStyle =
     "w-full px-4 py-3 rounded-[16px] bg-[#F6C1CC]/20 border-2 border-[#7A6C9D]/20 outline-none focus:ring-0 text-[#2E2A4A] placeholder:text-[#7A6C9D]";
 
-  // VALIDATION
+  const isSellerType = accountType === "seller" || accountType === "both";
+
   const validateField = (field, value) => {
-    let err = "";
-
     if (field === "name" && mode === "signup") {
-      if (!value) err = "Name is required";
+      return !value ? "Name is required" : "";
     }
-
     if (field === "email") {
-      if (!value) err = "Email is required";
-      else if (!value.includes("@")) err = "Email must include '@'";
-      else if (!validateEmail(value)) err = "Invalid email format";
+      if (!value) return "Email is required";
+      if (!value.includes("@")) return "Email must include '@'";
+      if (!validateEmail(value)) return "Invalid email format";
+      return "";
     }
-
     if (field === "password") {
-      if (!value) err = "Password is required";
-      else if (!/[A-Z]/.test(value))
-        err = "Must include at least one capital letter";
-      else if (!/[^A-Za-z0-9]/.test(value))
-        err = "Must include at least one symbol";
-      else if ((value.match(/\d/g) || []).length < 2)
-        err = "Must include at least two numbers";
+      if (!value) return "Password is required";
+      if (!/[A-Z]/.test(value)) return "Must include at least one capital letter";
+      if (!/[^A-Za-z0-9]/.test(value)) return "Must include at least one symbol";
+      if ((value.match(/\d/g) || []).length < 2) return "Must include at least two numbers";
+      return "";
     }
-
-    return err;
+    if (field === "phone") return validatePhone(value);
+    if (field === "contactEmail") return validateContactEmail(value);
+    if (field === "jazzcashPhone" || field === "easypaisaPhone") return validatePhone(value);
+    return "";
   };
 
   const handleChange = (field, value) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-    const err = validateField(field, value);
-    setErrors((prev) => ({ ...prev, [field]: err }));
+    const phoneFields = ["phone", "jazzcashPhone", "easypaisaPhone"];
+    const processed = phoneFields.includes(field) ? sanitizePhone(value) : value;
+    setFormData((prev) => ({ ...prev, [field]: processed }));
+    setErrors((prev) => ({ ...prev, [field]: validateField(field, processed) }));
+  };
+
+  const startResendCooldown = () => {
+    setResendCooldown(30);
+    const interval = setInterval(() => {
+      setResendCooldown((prev) => {
+        if (prev <= 1) { clearInterval(interval); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  const handleResendCode = () => {
+    if (resendCooldown > 0) return;
+    const newCode = generateVerificationCode();
+    setVerificationCode(newCode);
+    setEnteredCode("");
+    setVerifyError("");
+    startResendCooldown();
+  };
+
+  const handleVerifyCode = () => {
+    if (enteredCode.length !== 6) {
+      setVerifyError("Please enter the full 6-digit code.");
+      return;
+    }
+    if (enteredCode !== verificationCode) {
+      setVerifyError("Incorrect code. Please try again.");
+      return;
+    }
+
+    const result = register({
+      name: formData.name,
+      email: formData.email,
+      password: formData.password,
+      role: accountType,
+      phone: formData.phone,
+      contactEmail: formData.contactEmail,
+      jazzcashPhone: formData.jazzcashPhone,
+      easypaisaPhone: formData.easypaisaPhone,
+      emailVerified: true,
+    });
+
+    if (!result.success) {
+      setVerifyError(result.message);
+      return;
+    }
+
+    navigate("/");
   };
 
   const handleSubmit = (e) => {
-  e.preventDefault();
+    e.preventDefault();
+    setError(null);
 
-  let newErrors = {};
+    const newErrors = {};
 
-  // 🔥 FORCE VALIDATION FOR ALL FIELDS
-  if (mode === "signup") {
-    if (!formData.name) newErrors.name = "Name is required";
-  }
+    if (mode === "signup" && !formData.name)
+      newErrors.name = "Name is required";
 
-  if (!formData.email) {
-    newErrors.email = "Email is required";
-  } else if (!formData.email.includes("@")) {
-    newErrors.email = "Email must include '@'";
-  } else if (!validateEmail(formData.email)) {
-    newErrors.email = "Invalid email format";
-  }
+    if (!formData.email) newErrors.email = "Email is required";
+    else if (!formData.email.includes("@")) newErrors.email = "Email must include '@'";
+    else if (!validateEmail(formData.email)) newErrors.email = "Invalid email format";
 
-  if (!formData.password) {
-    newErrors.password = "Password is required";
-  } else if (!/[A-Z]/.test(formData.password)) {
-    newErrors.password = "Must include at least one capital letter";
-  } else if (!/[^A-Za-z0-9]/.test(formData.password)) {
-    newErrors.password = "Must include at least one symbol";
-  } else if ((formData.password.match(/\d/g) || []).length < 2) {
-    newErrors.password = "Must include at least two numbers";
-  }
+    if (!formData.password) newErrors.password = "Password is required";
+    else if (!/[A-Z]/.test(formData.password))
+      newErrors.password = "Must include at least one capital letter";
+    else if (!/[^A-Za-z0-9]/.test(formData.password))
+      newErrors.password = "Must include at least one symbol";
+    else if ((formData.password.match(/\d/g) || []).length < 2)
+      newErrors.password = "Must include at least two numbers";
 
-  // 🔥 SET ERRORS + STOP SUBMIT
-  if (Object.keys(newErrors).length > 0) {
-    setErrors(newErrors);
-    return;
-  }
+    const phoneErr = validatePhone(formData.phone);
+    if (phoneErr) newErrors.phone = phoneErr;
 
-  // LOGIN LOGIC
-  if (mode === "login") {
-    const savedUser = JSON.parse(localStorage.getItem("user"));
+    const contactEmailErr = validateContactEmail(formData.contactEmail);
+    if (contactEmailErr) newErrors.contactEmail = contactEmailErr;
 
-    if (!savedUser) return setError("User not found");
-    if (savedUser.email !== formData.email)
-      return setError("Email not registered");
-    if (savedUser.password !== formData.password)
-      return setError("Incorrect password");
+    // Wallet validation for sellers/both
+    if (mode === "signup" && isSellerType) {
+      const jcErr = validatePhone(formData.jazzcashPhone);
+      if (jcErr) newErrors.jazzcashPhone = jcErr;
 
-    login(savedUser);
-    setSubmitted(true);
-    return;
-  }
+      const epErr = validatePhone(formData.easypaisaPhone);
+      if (epErr) newErrors.easypaisaPhone = epErr;
 
-  // SIGNUP LOGIC
-  if (!accountType) {
-    setError("Please select account type");
-    return;
-  }
+      // Require AT LEAST ONE wallet for sellers
+      if (!formData.jazzcashPhone && !formData.easypaisaPhone) {
+        newErrors.walletRequired = "Sellers must provide at least one wallet (JazzCash or EasyPaisa) so buyers can pay you.";
+      }
+    }
 
-  const newUser = {
-    id: Date.now(),
-    name: formData.name,
-    email: formData.email,
-    password: formData.password,
-    role: accountType,
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      return;
+    }
+
+    if (mode === "login") {
+      const result = login({ email: formData.email, password: formData.password });
+      if (!result.success) { setError(result.message); return; }
+      navigate("/");
+      return;
+    }
+
+    if (!accountType) { setError("Please select account type"); return; }
+
+    const check = preRegister({
+      name: formData.name,
+      email: formData.email,
+      password: formData.password,
+      role: accountType,
+      phone: formData.phone,
+      contactEmail: formData.contactEmail,
+      jazzcashPhone: formData.jazzcashPhone,
+      easypaisaPhone: formData.easypaisaPhone,
+    });
+
+    if (!check.success) {
+      setError(check.message);
+      return;
+    }
+
+    const code = generateVerificationCode();
+    setVerificationCode(code);
+    setVerificationStep(true);
+    startResendCooldown();
   };
 
-  login(newUser);
-  setSubmitted(true);
-};
+  // ─── VERIFICATION STEP ─────────────────────────────────────
+  if (verificationStep) {
+    return (
+      <div className="min-h-screen py-12 px-4 lg:px-20">
+        <div className="max-w-[600px] mx-auto">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="rounded-[24px] bg-[#FFF6F8]/95 p-10 shadow-2xl text-center"
+          >
+            <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#F6C1CC] to-[#C8B6E2] flex items-center justify-center mx-auto mb-6">
+              <Mail className="w-10 h-10 text-white" />
+            </div>
+
+            <h1
+              style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3", textShadow: "0 0 30px rgba(255,143,163,0.6)" }}
+              className="text-4xl mb-3"
+            >
+              Verify Your Email
+            </h1>
+
+            <p className="text-[#7A6C9D] mb-2">
+              We've sent a 6-digit verification code to
+            </p>
+            <p className="text-[#2E2A4A] font-medium mb-6">{formData.email}</p>
+
+            <div className="rounded-[16px] bg-[#EDE8F9] border-2 border-dashed border-[#C8B6E2] p-4 mb-6">
+              <p className="text-[#7A6C9D] text-xs mb-2">
+                🚧 Demo Mode — your code (will be sent via email once backend is connected):
+              </p>
+              <p
+                className="text-3xl tracking-[0.5em] text-[#4A3A7A] font-bold"
+                style={{ fontFamily: "monospace" }}
+              >
+                {verificationCode}
+              </p>
+            </div>
+
+            <div className="mb-4">
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={6}
+                placeholder="• • • • • •"
+                value={enteredCode}
+                onChange={(e) => {
+                  const digits = e.target.value.replace(/\D/g, "").slice(0, 6);
+                  setEnteredCode(digits);
+                  if (verifyError) setVerifyError("");
+                }}
+                className="w-full px-4 py-4 rounded-[16px] bg-[#F6C1CC]/20 border-2 border-[#7A6C9D]/20 outline-none focus:border-[#FF8FA3] text-[#2E2A4A] text-2xl text-center tracking-[0.5em] font-bold"
+                style={{ fontFamily: "monospace" }}
+              />
+              {verifyError && <p className="text-red-500 text-sm mt-2">{verifyError}</p>}
+            </div>
+
+            <button
+              onClick={handleVerifyCode}
+              className="w-full py-4 rounded-full bg-[#FF8FA3] text-white hover:scale-[1.02] transition-all shadow-md mb-4"
+            >
+              Verify & Create Account
+            </button>
+
+            <div className="flex items-center justify-center gap-2 text-sm text-[#7A6C9D]">
+              <span>Didn't get the code?</span>
+              <button
+                onClick={handleResendCode}
+                disabled={resendCooldown > 0}
+                className={"flex items-center gap-1 font-medium transition-colors " + (resendCooldown > 0 ? "text-[#C8B6E2] cursor-not-allowed" : "text-[#FF8FA3] hover:underline")}
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : "Resend code"}
+              </button>
+            </div>
+
+            <button
+              onClick={() => {
+                setVerificationStep(false);
+                setVerificationCode("");
+                setEnteredCode("");
+                setVerifyError("");
+              }}
+              className="mt-6 text-[#C8B6E2] text-sm hover:text-[#FF8FA3] transition-colors"
+            >
+              ← Back to sign up
+            </button>
+          </motion.div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen py-12 px-4 lg:px-20">
       <div className="max-w-[800px] mx-auto">
-
-        {/* HEADER */}
         <motion.div className="text-center mb-12">
           <h1 className="text-5xl lg:text-6xl mb-4">
-            <span
-    style={{
-      fontFamily: "Fredoka, sans-serif",
-      color: "#F4F1F8", // 🔥 softer white (not pure white)
-      fontWeight: 500,
-      letterSpacing: "0.5px",
-    }}
-  >
+            <span style={{ fontFamily: "Fredoka, sans-serif", color: "#F4F1F8", fontWeight: 500, letterSpacing: "0.5px" }}>
               {mode === "login" ? "Log In " : "Join "}
             </span>
-            <span
-    style={{
-      fontFamily: "Pacifico, cursive",
-      color: "#FF8FA3",
-      textShadow: "0 0 35px rgba(255, 143, 163, 0.7)", // 🔥 stronger glow
-    }}
-  >LoomsLilly</span>
+            <span style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3", textShadow: "0 0 35px rgba(255, 143, 163, 0.7)" }}>
+              LoomsLilly
+            </span>
           </h1>
-
           <p className="text-xl text-[#FFF6F8]">
             {mode === "login"
               ? "Log in to continue your journey"
@@ -159,161 +344,168 @@ export function SignUp() {
           </p>
         </motion.div>
 
-        {/* SUCCESS */}
-        {submitted ? (
-          <div className="rounded-[24px] bg-[#FFF6F8]/90 p-12 text-center">
-            <h2 className="text-3xl text-[#2E2A4A]">
-               <span
-    style={{
-      fontFamily: "Pacifico, cursive",
-      color: "#FF8FA3",
-      textShadow: "0 0 35px rgba(255, 143, 163, 0.7)", // 🔥 stronger glow
-    }}
-  >Welcome!</span></h2>
-          </div>
-        ) : (
+        {mode === "signup" && !accountType ? (
           <>
-            {/* 🔥 ACCOUNT TYPE (FIXED UI) */}
-            {mode === "signup" && !accountType ? (
-              <>
-                <h2 className="text-3xl text-center text-[#FFF6F8] mb-8">
-                  I want to...
-                </h2>
-
-                <div className="grid md:grid-cols-3 gap-6">
-                  {[
-                    {
-                      type: "buyer",
-                      icon: ShoppingBag,
-                      label: "Buy",
-                      description: "Shop for creative supplies",
-                    },
-                    {
-                      type: "seller",
-                      icon: Store,
-                      label: "Sell",
-                      description: "Share your handmade creations",
-                    },
-                    {
-                      type: "both",
-                      icon: Users,
-                      label: "Both",
-                      description: "Buy and sell in the community",
-                    },
-                  ].map((option, index) => (
-                    <motion.button
-                      key={option.type}
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: index * 0.1 }}
-                      whileHover={{ scale: 1.05, y: -8 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={() => setAccountType(option.type)}
-                      className="rounded-[24px] bg-[#FFF6F8]/90 backdrop-blur-sm border-2 border-[#7A6C9D]/20 p-8 shadow-xl hover:shadow-2xl transition-all duration-300"
-                    >
-                      <div className="flex flex-col items-center gap-4">
-
-                        <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#F6C1CC] to-[#C8B6E2] flex items-center justify-center">
-                          <option.icon className="w-10 h-10 text-white" />
-                        </div>
-
-                        <h3 className="text-2xl text-[#2E2A4A]">
-                          {option.label}
-                        </h3>
-
-                        <p className="text-[#7A6C9D] text-center">
-                          {option.description}
-                        </p>
-                      </div>
-                    </motion.button>
-                  ))}
-                </div>
-              </>
-            ) : (
-
-            /* FORM */
-            <div className="rounded-[24px] bg-[#FFF6F8]/90 p-8">
-
-              {error && (
-                <p className="text-red-500 text-center mb-4">{error}</p>
-              )}
-
-              <form onSubmit={handleSubmit} className="space-y-6">
-
-                {/* NAME */}
-                {mode === "signup" && (
-                  <div>
-                    <input
-                      placeholder="Full Name"
-                      value={formData.name}
-                      onChange={(e) =>
-                        handleChange("name", e.target.value)
-                      }
-                      className={inputStyle}
-                    />
-                    {errors.name && (
-                      <p className="text-red-500 text-sm mt-1">
-                        {errors.name}
-                      </p>
-                    )}
+            <h2 className="text-3xl text-center text-[#FFF6F8] mb-8">I want to...</h2>
+            <div className="grid md:grid-cols-3 gap-6">
+              {[
+                { type: "buyer", icon: ShoppingBag, label: "Buy", description: "Shop for creative supplies" },
+                { type: "seller", icon: Store, label: "Sell", description: "Share your handmade creations" },
+                { type: "both", icon: Users, label: "Both", description: "Buy and sell in the community" },
+              ].map((option, index) => (
+                <motion.button
+                  key={option.type}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: index * 0.1 }}
+                  whileHover={{ scale: 1.05, y: -8 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => setAccountType(option.type)}
+                  className="rounded-[24px] bg-[#FFF6F8]/90 backdrop-blur-sm border-2 border-[#7A6C9D]/20 p-8 shadow-xl hover:shadow-2xl transition-all duration-300"
+                >
+                  <div className="flex flex-col items-center gap-4">
+                    <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#F6C1CC] to-[#C8B6E2] flex items-center justify-center">
+                      <option.icon className="w-10 h-10 text-white" />
+                    </div>
+                    <h3 className="text-2xl text-[#2E2A4A]">{option.label}</h3>
+                    <p className="text-[#7A6C9D] text-center">{option.description}</p>
                   </div>
-                )}
+                </motion.button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <div className="rounded-[24px] bg-[#FFF6F8]/90 p-8">
+            {error && <p className="text-red-500 text-center mb-4">{error}</p>}
 
-                {/* EMAIL */}
+            <form onSubmit={handleSubmit} className="space-y-6">
+              {mode === "signup" && (
                 <div>
                   <input
-                    placeholder="Email"
-                    value={formData.email}
-                    onChange={(e) =>
-                      handleChange("email", e.target.value)
-                    }
+                    placeholder="Full Name *"
+                    value={formData.name}
+                    onChange={(e) => handleChange("name", e.target.value)}
                     className={inputStyle}
                   />
-                  {errors.email && (
-                    <p className="text-red-500 text-sm mt-1">
-                      {errors.email}
-                    </p>
-                  )}
+                  {errors.name && <p className="text-red-500 text-sm mt-1">{errors.name}</p>}
                 </div>
+              )}
 
-                {/* 🔥 PASSWORD WITH TOGGLE */}
-                <div className="relative">
-                  <input
-                    type={showPassword ? "text" : "password"}
-                    placeholder="Password"
-                    value={formData.password}
-                    onChange={(e) =>
-                      handleChange("password", e.target.value)
-                    }
-                    className={`${inputStyle} pr-12`}
-                  />
+              <div>
+                <input
+                  placeholder="Email *"
+                  value={formData.email}
+                  onChange={(e) => handleChange("email", e.target.value)}
+                  className={inputStyle}
+                />
+                {errors.email && <p className="text-red-500 text-sm mt-1">{errors.email}</p>}
+              </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 text-[#7A6C9D] hover:text-[#FF8FA3]"
-                  >
-                    {showPassword ? (
-                      <EyeOff className="w-5 h-5" />
-                    ) : (
-                      <Eye className="w-5 h-5" />
-                    )}
-                  </button>
-
-                  {errors.password && (
-                    <p className="text-red-500 text-sm mt-1">
-                      {errors.password}
-                    </p>
-                  )}
-                </div>
-
-                <button className="w-full py-4 rounded-full bg-[#FF8FA3] text-white">
-                  {mode === "login" ? "Log In" : "Create Account"}
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Password *"
+                  value={formData.password}
+                  onChange={(e) => handleChange("password", e.target.value)}
+                  className={`${inputStyle} pr-12`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-[#7A6C9D] hover:text-[#FF8FA3]"
+                >
+                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
-              </form>
-            </div>
-            )}
-          </>
+                {errors.password && <p className="text-red-500 text-sm mt-1">{errors.password}</p>}
+              </div>
+
+              {mode === "signup" && (
+                <div className="rounded-[16px] bg-[#F6C1CC]/10 border-2 border-[#7A6C9D]/10 p-5 space-y-4">
+                  <p className="text-[#7A6C9D] text-sm font-medium">
+                    Contact Info{" "}
+                    <span className="text-xs text-[#C8B6E2]">(optional — used for checkout & events)</span>
+                  </p>
+
+                  <div>
+                    <input
+                      placeholder="Phone e.g. +923001234567 or 03001234567"
+                      value={formData.phone}
+                      onChange={(e) => handleChange("phone", e.target.value)}
+                      className={inputStyle + (errors.phone ? " border-red-400" : "")}
+                    />
+                    {errors.phone && <p className="text-red-500 text-xs mt-1">{errors.phone}</p>}
+                    <p className="text-[#C8B6E2] text-xs mt-1">
+                      Accepted: +923001234567 · 03001234567 · +92211234567 · 0211234567
+                    </p>
+                  </div>
+
+                  <div>
+                    <input
+                      placeholder="Contact Email (if different from login email)"
+                      value={formData.contactEmail}
+                      onChange={(e) => handleChange("contactEmail", e.target.value)}
+                      className={inputStyle + (errors.contactEmail ? " border-red-400" : "")}
+                    />
+                    {errors.contactEmail && (
+                      <p className="text-red-500 text-xs mt-1">{errors.contactEmail}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* ─── SELLER WALLET INFO ─── */}
+              {mode === "signup" && isSellerType && (
+                <div className="rounded-[16px] bg-[#EDE8F9]/40 border-2 border-[#C8B6E2]/40 p-5 space-y-4">
+                  <div className="flex items-start gap-2">
+                    <Smartphone className="w-5 h-5 text-[#7A6C9D] flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-[#7A6C9D] text-sm font-medium">Seller Wallet Info</p>
+                      <p className="text-xs text-[#C8B6E2] mt-1">
+                        Buyers will see your wallet number(s) when they pay with JazzCash or EasyPaisa.
+                        You need at least one — both is best.
+                      </p>
+                    </div>
+                  </div>
+
+                  {errors.walletRequired && (
+                    <div className="rounded-[12px] bg-red-50 border border-red-200 p-3">
+                      <p className="text-red-500 text-sm">{errors.walletRequired}</p>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-[#7A6C9D] text-xs mb-1">JazzCash Phone</label>
+                    <input
+                      placeholder="e.g. 03001234567"
+                      value={formData.jazzcashPhone}
+                      onChange={(e) => handleChange("jazzcashPhone", e.target.value)}
+                      className={inputStyle + (errors.jazzcashPhone ? " border-red-400" : "")}
+                    />
+                    {errors.jazzcashPhone && (
+                      <p className="text-red-500 text-xs mt-1">{errors.jazzcashPhone}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-[#7A6C9D] text-xs mb-1">EasyPaisa Phone</label>
+                    <input
+                      placeholder="e.g. 03001234567"
+                      value={formData.easypaisaPhone}
+                      onChange={(e) => handleChange("easypaisaPhone", e.target.value)}
+                      className={inputStyle + (errors.easypaisaPhone ? " border-red-400" : "")}
+                    />
+                    {errors.easypaisaPhone && (
+                      <p className="text-red-500 text-xs mt-1">{errors.easypaisaPhone}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <button className="w-full py-4 rounded-full bg-[#FF8FA3] text-white">
+                {mode === "login" ? "Log In" : "Create Account"}
+              </button>
+            </form>
+          </div>
         )}
       </div>
     </div>

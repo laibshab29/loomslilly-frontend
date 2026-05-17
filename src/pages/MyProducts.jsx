@@ -1,15 +1,34 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useProducts } from "../context/ProductContext";
 import { useAuth } from "../context/AuthContext";
+import { useNotifications } from "../context/NotificationContext";
+import { LowStockBanner } from "../components/shared/LowStockBanner";
 
 export function MyProducts() {
-  const { products, deleteProduct, updateProduct } = useProducts();
+  const { products, deleteProduct, updateProduct, getLowStockProducts } = useProducts();
   const { user, role } = useAuth();
+  const { notifyLowStock, notifyCriticalStock, notifyOutOfStock, resolveStockNotification } =
+    useNotifications();
 
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [deleteTargetId, setDeleteTargetId] = useState(null);
+
+  useEffect(() => {
+    if (!user) return;
+    const sellerProds = products.filter((p) => p.sellerId === user.id);
+    sellerProds.forEach((p) => {
+      if (p.stock === 0) {
+        notifyOutOfStock({ recipientId: user.id, productId: p.id, productName: p.name });
+      } else if (p.stock < 10) {
+        notifyCriticalStock({ recipientId: user.id, productId: p.id, productName: p.name, stock: p.stock });
+      } else if (p.stock < 20) {
+        notifyLowStock({ recipientId: user.id, productId: p.id, productName: p.name, stock: p.stock });
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [products, user]);
 
   if (role !== "seller" && role !== "both") {
     return (
@@ -29,6 +48,7 @@ export function MyProducts() {
   }
 
   const sellerProducts = products.filter((p) => p.sellerId === user?.id);
+  const lowStockProducts = getLowStockProducts(user?.id, 20);
 
   const inputStyle =
     "w-full px-4 py-3 rounded-[16px] bg-[#F6C1CC]/20 border-2 border-[#7A6C9D]/20 outline-none text-[#2E2A4A]";
@@ -47,24 +67,32 @@ export function MyProducts() {
     });
   };
 
-  // 🔥 If a field is cleared/blank, fall back to the original product value
   const handleSave = (id, originalProduct) => {
     const updated = {
-      name:     editForm.name?.trim()     || originalProduct.name,
+      name: editForm.name?.trim() || originalProduct.name,
       category: editForm.category?.trim() || originalProduct.category,
-      type:     editForm.type?.trim()     || originalProduct.type,
-      price:    editForm.price !== "" && editForm.price !== undefined
-                  ? editForm.price
-                  : originalProduct.price,
-      stock:    editForm.stock !== "" && editForm.stock !== undefined
-                  ? editForm.stock
-                  : originalProduct.stock,
-      details:  editForm.details?.trim()  || originalProduct.details,
+      type: editForm.type?.trim() || originalProduct.type,
+      price:
+        editForm.price !== "" && editForm.price !== undefined
+          ? editForm.price
+          : originalProduct.price,
+      stock:
+        editForm.stock !== "" && editForm.stock !== undefined
+          ? editForm.stock
+          : originalProduct.stock,
+      details: editForm.details?.trim() || originalProduct.details,
       delivery: editForm.delivery?.trim() || originalProduct.delivery,
-      image:    editForm.image            ?? originalProduct.image,
+      image: editForm.image ?? originalProduct.image,
     };
 
     updateProduct(id, updated);
+
+    resolveStockNotification({
+      recipientId: user.id,
+      productId: id,
+      newStock: Number(updated.stock),
+    });
+
     setEditingId(null);
     setEditForm({});
   };
@@ -98,11 +126,19 @@ export function MyProducts() {
                 color: "#FFF6F8",
               }}
             >
-              products
+              Products
             </span>
           </h1>
         </div>
 
+        {/* LOW STOCK BANNER */}
+        {lowStockProducts.length > 0 && (
+          <div className="max-w-[800px] mx-auto">
+            <LowStockBanner products={lowStockProducts} />
+          </div>
+        )}
+
+        {/* UPLOAD BUTTON */}
         <div className="flex justify-center mt-6 mb-10">
           <a
             href="/upload"
@@ -133,7 +169,6 @@ export function MyProducts() {
                   )}
                 </div>
 
-                {/* ── NORMAL VIEW ── */}
                 {editingId !== product.id ? (
                   <>
                     <h2 className="text-2xl text-[#2E2A4A] mb-2">{product.name}</h2>
@@ -141,7 +176,24 @@ export function MyProducts() {
                       {product.category} • {product.type}
                     </p>
                     <p className="text-[#FF8FA3] text-2xl mt-2">Rs. {product.price}</p>
-                    <p className="text-[#2E2A4A] mt-2">Stock: {product.stock}</p>
+                    <p className="text-[#2E2A4A] mt-2">
+                      Stock: {product.stock}
+                      {product.stock > 0 && product.stock < 10 && (
+                        <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-orange-100 text-orange-600">
+                          Critical
+                        </span>
+                      )}
+                      {product.stock >= 10 && product.stock < 20 && (
+                        <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                          Low
+                        </span>
+                      )}
+                      {product.stock === 0 && (
+                        <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">
+                          Out of Stock
+                        </span>
+                      )}
+                    </p>
                     <p className="text-[#2E2A4A]">❤️ {product.likes || 0} Likes</p>
 
                     <div className="flex gap-3 mt-6">
@@ -160,10 +212,7 @@ export function MyProducts() {
                     </div>
                   </>
                 ) : (
-
-                  /* ── EDIT VIEW ── */
                   <>
-                    {/* IMAGE UPDATE */}
                     <div className="mb-4">
                       <p className="text-[#7A6C9D] text-sm mb-2">Update Product Image</p>
                       <input
@@ -181,7 +230,6 @@ export function MyProducts() {
                       />
                     </div>
 
-                    {/* NAME */}
                     <input
                       placeholder={product.name}
                       value={editForm.name}
@@ -191,7 +239,6 @@ export function MyProducts() {
                       className={inputStyle + " mb-4"}
                     />
 
-                    {/* CATEGORY */}
                     <select
                       value={editForm.category}
                       onChange={(e) =>
@@ -208,7 +255,6 @@ export function MyProducts() {
                       <option value="arts">Arts</option>
                     </select>
 
-                    {/* SUBCATEGORY */}
                     {editForm.category && (
                       <select
                         value={editForm.type}
@@ -235,7 +281,6 @@ export function MyProducts() {
                       </select>
                     )}
 
-                    {/* PRICE */}
                     <input
                       type="number"
                       placeholder={product.price}
@@ -246,7 +291,6 @@ export function MyProducts() {
                       className={inputStyle + " mb-4"}
                     />
 
-                    {/* STOCK */}
                     <input
                       type="number"
                       placeholder={product.stock}
@@ -260,7 +304,6 @@ export function MyProducts() {
                       className={inputStyle + " mb-4"}
                     />
 
-                    {/* DETAILS */}
                     <textarea
                       placeholder={product.details || "Product Details"}
                       value={editForm.details}
@@ -270,7 +313,6 @@ export function MyProducts() {
                       className={inputStyle + " mb-4"}
                     />
 
-                    {/* DELIVERY */}
                     <input
                       placeholder={product.delivery || "Delivery Time (e.g. 3-5 days)"}
                       value={editForm.delivery}
@@ -280,7 +322,6 @@ export function MyProducts() {
                       className={inputStyle + " mb-4"}
                     />
 
-                    {/* SAVE */}
                     <button
                       onClick={() => handleSave(product.id, product)}
                       className="w-full py-3 rounded-full bg-[#FF8FA3] text-white"
@@ -288,9 +329,11 @@ export function MyProducts() {
                       Save Changes
                     </button>
 
-                    {/* CANCEL */}
                     <button
-                      onClick={() => { setEditingId(null); setEditForm({}); }}
+                      onClick={() => {
+                        setEditingId(null);
+                        setEditForm({});
+                      }}
                       className="w-full py-3 mt-2 rounded-full bg-[#C8B6E2] text-[#2E2A4A]"
                     >
                       Cancel
@@ -316,7 +359,7 @@ export function MyProducts() {
         )}
       </div>
 
-      {/* STYLED DELETE CONFIRMATION MODAL */}
+      {/* DELETE CONFIRMATION MODAL */}
       <AnimatePresence>
         {deleteTargetId !== null && (
           <motion.div
@@ -342,11 +385,9 @@ export function MyProducts() {
               >
                 Delete Product?
               </h2>
-
               <p className="text-[#7A6C9D] mb-8">
                 This action cannot be undone. Your product will be permanently removed.
               </p>
-
               <div className="flex gap-4">
                 <button
                   onClick={() => setDeleteTargetId(null)}

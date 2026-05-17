@@ -1,112 +1,169 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { useProducts } from "./ProductContext";
+
 const CartContext = createContext();
 
 export function CartProvider({ children }) {
-  const [cart, setCart] = useState([]);
-  const { reduceStock } = useProducts();
-  // Load from localStorage
-  useEffect(() => {
-    const savedCart = localStorage.getItem("cart");
-    if (savedCart) {
-      setCart(JSON.parse(savedCart));
+  // ─── LAZY INIT FROM localStorage ─────────────────────────────
+  const [cart, setCart] = useState(() => {
+    try {
+      const saved = localStorage.getItem("loomslilly_cart");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
     }
-  }, []);
+  });
 
-  // Save to localStorage
+  const [selectedItems, setSelectedItems] = useState(() => {
+    try {
+      const saved = localStorage.getItem("loomslilly_selected");
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
+  const [stockError, setStockError] = useState("");
+  const { reduceStock } = useProducts();
+
+  // ─── PERSIST CART ─────────────────────────────────────────────
   useEffect(() => {
-    localStorage.setItem("cart", JSON.stringify(cart));
+    try {
+      localStorage.setItem("loomslilly_cart", JSON.stringify(cart));
+    } catch (e) {
+      console.warn("cart save failed:", e);
+    }
   }, [cart]);
 
-  // ✅ ADD TO CART (with stock validation)
+  // ─── PERSIST SELECTED ─────────────────────────────────────────
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "loomslilly_selected",
+        JSON.stringify([...selectedItems])
+      );
+    } catch (e) {
+      console.warn("selection save failed:", e);
+    }
+  }, [selectedItems]);
+
+  const clearStockError = () => setStockError("");
+
+  // ─── ADD TO CART ──────────────────────────────────────────────
   const addToCart = (product, quantity = 1) => {
     setCart((prev) => {
       const existing = prev.find((item) => item.id === product.id);
 
-      // If already exists → increase quantity safely
       if (existing) {
         const newQuantity = existing.quantity + quantity;
-
-        // ❌ Prevent exceeding stock
         if (newQuantity > product.stock) {
-          alert("Not enough stock available.");
+          setStockError(
+            "Only " + product.stock + ' units of "' + product.name + '" are available.'
+          );
           return prev;
         }
-
         return prev.map((item) =>
-          item.id === product.id
-            ? { ...item, quantity: newQuantity }
-            : item
+          item.id === product.id ? { ...item, quantity: newQuantity } : item
         );
       }
 
-      // ❌ Prevent adding more than stock initially
       if (quantity > product.stock) {
-        alert("Not enough stock available.");
+        setStockError(
+          "Only " + product.stock + ' units of "' + product.name + '" are available.'
+        );
         return prev;
       }
 
+      // Auto-select newly added items
+      setSelectedItems((s) => new Set([...s, product.id]));
       return [...prev, { ...product, quantity }];
     });
   };
 
-  // ✅ REMOVE
+  // ─── REMOVE ───────────────────────────────────────────────────
   const removeFromCart = (id) => {
     setCart((prev) => prev.filter((item) => item.id !== id));
+    setSelectedItems((s) => {
+      const next = new Set(s);
+      next.delete(id);
+      return next;
+    });
   };
-const clearCart = () => {
-  setCart([]);
-};
-  // ✅ UPDATE QUANTITY (with stock check)
+
+  // ─── UPDATE QUANTITY ──────────────────────────────────────────
   const updateQuantity = (id, quantity) => {
-  setCart((prev) =>
-    prev.map((item) => {
-
-      if (item.id === id) {
-
-        if (quantity <= 0) {
-          return item;
-        }
-
+    setCart((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        if (quantity <= 0) return item;
         if (quantity > item.stock) {
-          alert("Not enough stock available.");
+          setStockError(
+            "Only " + item.stock + ' units of "' + item.name + '" are available.'
+          );
           return item;
         }
+        return { ...item, quantity };
+      })
+    );
+  };
 
-        return {
-          ...item,
-          quantity,
-        };
-      }
+  // ─── CLEAR ────────────────────────────────────────────────────
+  const clearCart = () => {
+    setCart([]);
+    setSelectedItems(new Set());
+  };
 
-      return item;
-    })
-  );
-};
+  // ─── SELECTION HELPERS ────────────────────────────────────────
+  const toggleSelect = (id) => {
+    setSelectedItems((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
-const checkout = () => {
+  const selectAll = () =>
+    setSelectedItems(new Set(cart.map((item) => item.id)));
 
-  if (cart.length === 0) {
-    alert("Cart is empty.");
-    return;
-  }
+  const clearSelection = () => setSelectedItems(new Set());
 
-  reduceStock(cart);
+  const isSelected = (id) => selectedItems.has(id);
 
-  setCart([]);
+  const selectedCart = cart.filter((item) => selectedItems.has(item.id));
 
-  alert("Checkout successful!");
-};
+  // ─── CHECKOUT (selected items only) ───────────────────────────
+  const checkout = (itemsToCheckout) => {
+    const items = itemsToCheckout ?? cart;
+    if (items.length === 0) return;
+    reduceStock(items);
+    const checkedOutIds = new Set(items.map((i) => i.id));
+    setCart((prev) => prev.filter((item) => !checkedOutIds.has(item.id)));
+    setSelectedItems((s) => {
+      const next = new Set(s);
+      checkedOutIds.forEach((id) => next.delete(id));
+      return next;
+    });
+  };
 
   return (
     <CartContext.Provider
       value={{
-  cart,
-  addToCart,
-  removeFromCart,
-  updateQuantity,
-  checkout,
-}}
+        cart,
+        selectedItems,
+        selectedCart,
+        addToCart,
+        removeFromCart,
+        updateQuantity,
+        checkout,
+        clearCart,
+        toggleSelect,
+        selectAll,
+        clearSelection,
+        isSelected,
+        stockError,
+        clearStockError,
+      }}
     >
       {children}
     </CartContext.Provider>

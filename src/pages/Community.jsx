@@ -1,30 +1,35 @@
 import { motion } from "framer-motion";
 import { MessageCircle, Users } from "lucide-react";
 import { useState, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useCommunity } from "../context/CommunityContext";
+import { CommunityGuidelinesModal } from "../components/shared/CommunityGuidelinesModal";
+import { LeaveCommunityModal } from "../components/shared/LeaveCommunityModal";
+import { GuestBlock } from "../components/shared/GuestBlock";
 
 export function Community() {
-  const { isGuest, user } = useAuth();
+  const {
+    isGuest,
+    user,
+    isCommunityMember,
+    joinCommunityMembership,
+    leaveCommunityMembership,
+  } = useAuth();
   const { discussions, memberCount, joinCommunity, isBanned, reports } = useCommunity();
   const navigate = useNavigate();
 
-  const [joined, setJoined] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
-const visibleDiscussions = discussions.filter(
-  (d) => (reports[d.authorId]?.count ?? 0) < 3
-);
-  // 🔥 Persist terms acceptance
+  const [guidelinesOpen, setGuidelinesOpen] = useState(false);
+  const [leaveOpen, setLeaveOpen] = useState(false);
+
+  const visibleDiscussions = discussions.filter(
+    (d) => (reports[d.authorId]?.count ?? 0) < 3
+  );
+
   useEffect(() => {
     const saved = localStorage.getItem("communityAccepted");
     if (saved === "true") setAcceptedTerms(true);
-  }, []);
-
-  // 🔥 Check if user was previously joined
-  useEffect(() => {
-    const savedJoined = localStorage.getItem("communityJoined");
-    if (savedJoined === "true") setJoined(true);
   }, []);
 
   const handleAcceptTerms = () => {
@@ -32,37 +37,34 @@ const visibleDiscussions = discussions.filter(
     setAcceptedTerms(true);
   };
 
-  const handleJoin = () => {
+  const handleConfirmJoin = () => {
+    setGuidelinesOpen(false);
+    if (isGuest) {
+      navigate("/signup");
+      return;
+    }
     if (user) joinCommunity(user.id);
-    localStorage.setItem("communityJoined", "true");
-    setJoined(true);
+    joinCommunityMembership();
   };
 
-  // 🔥 Step 23 — banned user block
+  const handleConfirmLeave = (reason) => {
+    if (reason) {
+      console.log("Leave reason:", reason);
+    }
+    leaveCommunityMembership();
+    setLeaveOpen(false);
+    navigate("/");
+  };
+
   const userIsBanned = user && isBanned(user.id);
 
   return (
     <div className="min-h-screen py-12 px-4 lg:px-20">
       <div className="max-w-[1440px] mx-auto">
 
-        {/* 🔒 GUEST BLOCK */}
+        {/* 🔒 GUEST BLOCK — uses shared component */}
         {isGuest && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="text-center py-20"
-          >
-            <div className="text-7xl mb-6">🔒</div>
-            <h2 className="text-3xl text-[#FFF6F8] mb-4">
-              Sign up to join the community
-            </h2>
-            <Link
-              to="/signup"
-              className="px-8 py-4 rounded-full bg-[#FF8FA3] text-white hover:scale-105 transition-all"
-            >
-              Sign Up Now
-            </Link>
-          </motion.div>
+          <GuestBlock message="Sign up to join our creative community, share ideas, and connect with fellow makers." />
         )}
 
         {/* 🚫 BANNED BLOCK */}
@@ -137,7 +139,6 @@ const visibleDiscussions = discussions.filter(
         {/* ✅ MAIN COMMUNITY CONTENT */}
         {!isGuest && !userIsBanned && acceptedTerms && (
           <>
-            {/* Header */}
             <motion.div
               initial={{ opacity: 0, y: -20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -159,9 +160,9 @@ const visibleDiscussions = discussions.filter(
                 Connect with fellow creators and share your passion
               </p>
 
-              {!joined && (
+              {!isCommunityMember && (
                 <button
-                  onClick={handleJoin}
+                  onClick={() => setGuidelinesOpen(true)}
                   className="px-12 py-4 rounded-full bg-[#FF8FA3] text-white hover:scale-105 transition-all"
                 >
                   Join Community
@@ -169,8 +170,7 @@ const visibleDiscussions = discussions.filter(
               )}
             </motion.div>
 
-            {/* Joined welcome */}
-            {joined && (
+            {isCommunityMember && (
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -182,7 +182,6 @@ const visibleDiscussions = discussions.filter(
               </motion.div>
             )}
 
-            {/* 🔥 Step 19 — Dynamic stats */}
             <div className="grid md:grid-cols-2 gap-6 mb-12">
               <div className="rounded-[24px] bg-[#FFF6F8]/90 p-8 shadow-lg">
                 <Users className="w-12 h-12 text-[#FF8FA3] mb-4" />
@@ -205,7 +204,6 @@ const visibleDiscussions = discussions.filter(
               </div>
             </div>
 
-            {/* 🔥 Step 20 — Clickable discussions + Start Discussion */}
             <div className="rounded-[24px] bg-[#FFF6F8]/90 p-8 shadow-lg">
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-3xl text-[#2E2A4A]">Recent Discussions</h2>
@@ -244,9 +242,34 @@ const visibleDiscussions = discussions.filter(
                 ))}
               </div>
             </div>
+
+            {isCommunityMember && (
+              <div className="text-center mt-12">
+                <button
+                  onClick={() => setLeaveOpen(true)}
+                  className="px-8 py-3 rounded-full bg-[#C8B6E2]/40 text-[#FFF6F8] hover:bg-[#FF8FA3] hover:text-white transition-all duration-300"
+                >
+                  Leave Community
+                </button>
+              </div>
+            )}
           </>
         )}
+
       </div>
+
+      <CommunityGuidelinesModal
+        isOpen={guidelinesOpen}
+        onClose={() => setGuidelinesOpen(false)}
+        onConfirm={handleConfirmJoin}
+        isGuest={isGuest}
+      />
+
+      <LeaveCommunityModal
+        isOpen={leaveOpen}
+        onClose={() => setLeaveOpen(false)}
+        onConfirm={handleConfirmLeave}
+      />
     </div>
   );
 }
