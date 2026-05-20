@@ -3,7 +3,6 @@ import { useSellers } from "../context/SellerContext";
 import { useParams } from "react-router-dom";
 import { useProducts } from "../context/ProductContext";
 import { useOrders } from "../context/OrderContext";
-import { useAuth } from "../context/AuthContext";
 import { ProductCard } from "../components/ProductCard";
 import { motion } from "framer-motion";
 import { User, Tag, TrendingUp, Smartphone } from "lucide-react";
@@ -11,6 +10,7 @@ import { Link } from "react-router-dom";
 import { useState, useMemo, useEffect } from "react";
 import { SortBar, sortProducts } from "../components/SortBar";
 import { supabase } from "../lib/supabase";
+import { resolveAvatar } from "../lib/avatars";
 
 export function SellerProfile() {
   const { id } = useParams();
@@ -19,15 +19,12 @@ export function SellerProfile() {
   const { orders } = useOrders();
 
   const [sort, setSort] = useState("recent");
-
-  // ─── FETCH SELLER PROFILE DIRECTLY FROM DB ───────────────────
-  // SellerContext may not have the full profile loaded yet, so we
-  // also fetch directly from profiles table to guarantee name +
-  // wallet numbers are always available.
   const [sellerProfile, setSellerProfile] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(true);
 
   useEffect(() => {
     if (!id) return;
+    setProfileLoading(true);
     supabase
       .from("profiles")
       .select("id, name, role, jazzcash_phone, easypaisa_phone, avatar_url")
@@ -35,25 +32,29 @@ export function SellerProfile() {
       .single()
       .then(({ data }) => {
         if (data) setSellerProfile(data);
+        setProfileLoading(false);
       });
   }, [id]);
 
-  // sellerId is a UUID string (Supabase auth UUID), not a number
   const sellerId = id;
-
-  // Merge SellerContext data with direct profile fetch
   const sellerFromContext = getSellerById(sellerId);
+
+  // Merge direct profile fetch with SellerContext data
   const seller = sellerProfile
     ? {
         id: sellerProfile.id,
-        name: sellerProfile.name || sellerFromContext?.name || "Seller",
-        image: sellerProfile.avatar_url || sellerFromContext?.image || null,
+        // FIX: always prefer the DB name; fall back to context then default
+        name: sellerProfile.name?.trim() || sellerFromContext?.name || "Seller",
+        // Resolve avatar: stored as "avatar3" id or a full URL
+        image: resolveAvatar(sellerProfile.avatar_url) ||
+               sellerFromContext?.image || null,
         jazzcashPhone: sellerProfile.jazzcash_phone || "",
         easypaisaPhone: sellerProfile.easypaisa_phone || "",
       }
     : sellerFromContext
     ? {
         ...sellerFromContext,
+        image: resolveAvatar(sellerFromContext.avatar_url || sellerFromContext.image),
         jazzcashPhone: sellerFromContext.jazzcashPhone || "",
         easypaisaPhone: sellerFromContext.easypaisaPhone || "",
       }
@@ -67,7 +68,8 @@ export function SellerProfile() {
   orders.forEach((order) => {
     order.items.forEach((item) => {
       if (item.sellerId === sellerId) {
-        salesByProductId[item.id] = (salesByProductId[item.id] || 0) + item.quantity;
+        salesByProductId[item.id] =
+          (salesByProductId[item.id] || 0) + item.quantity;
       }
     });
   });
@@ -91,8 +93,7 @@ export function SellerProfile() {
     }, {});
   }, [sellerProducts, sort]);
 
-  // Show loading state while profile is being fetched
-  if (!seller && !sellerProfile) {
+  if (profileLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center text-center">
         <div>
@@ -126,10 +127,15 @@ export function SellerProfile() {
           animate={{ opacity: 1, y: 0 }}
           className="text-center mb-12"
         >
+          {/* AVATAR */}
           <div className="flex justify-center mb-4">
-            <div className="w-28 h-28 rounded-full bg-gradient-to-br from-[#F6C1CC] to-[#C8B6E2] flex items-center justify-center overflow-hidden shadow-lg">
+            <div className="w-28 h-28 rounded-full bg-gradient-to-br from-[#F6C1CC] to-[#C8B6E2] flex items-center justify-center overflow-hidden shadow-lg border-4 border-[#FF8FA3]/30">
               {seller.image ? (
-                <img src={seller.image} className="w-full h-full object-cover" alt="" />
+                <img
+                  src={seller.image}
+                  className="w-full h-full object-cover"
+                  alt={seller.name}
+                />
               ) : (
                 <User className="text-white w-12 h-12" />
               )}
@@ -148,11 +154,16 @@ export function SellerProfile() {
           </h1>
 
           <p className="text-[#FFF6F8]/70 text-sm">
-            {sellerProducts.length} {sellerProducts.length === 1 ? "product" : "products"}
-            {sellerDeals.length > 0 && " · " + sellerDeals.length + " active " + (sellerDeals.length === 1 ? "deal" : "deals")}
+            {sellerProducts.length}{" "}
+            {sellerProducts.length === 1 ? "product" : "products"}
+            {sellerDeals.length > 0 &&
+              " · " +
+                sellerDeals.length +
+                " active " +
+                (sellerDeals.length === 1 ? "deal" : "deals")}
           </p>
 
-          {/* ─── WALLET INFO ─────────────────────────────────── */}
+          {/* WALLET INFO */}
           {hasWalletInfo && (
             <div className="mt-4 inline-flex flex-col items-center gap-2">
               {seller.jazzcashPhone && (
@@ -202,16 +213,26 @@ export function SellerProfile() {
                     )}
                     <h3
                       className="text-2xl mb-2"
-                      style={{ fontFamily: "Pacifico, cursive", color: "#FFF6F8" }}
+                      style={{
+                        fontFamily: "Pacifico, cursive",
+                        color: "#FFF6F8",
+                      }}
                     >
                       {deal.title}
                     </h3>
                     <p className="text-white/80 text-sm mb-2">
-                      {deal.products.length} {deal.products.length === 1 ? "product" : "products"}
+                      {deal.products?.length || 0}{" "}
+                      {(deal.products?.length || 0) === 1 ? "product" : "products"}
                     </p>
                     <div className="text-white">
-                      <p className="text-sm line-through opacity-70">Rs. {deal.originalPrice}</p>
-                      <p className="text-xl font-medium">Rs. {deal.discountedPrice}</p>
+                      {deal.originalPrice && (
+                        <p className="text-sm line-through opacity-70">
+                          Rs. {deal.originalPrice}
+                        </p>
+                      )}
+                      <p className="text-xl font-medium">
+                        Rs. {deal.discountedPrice}
+                      </p>
                     </div>
                   </motion.div>
                 </Link>
@@ -232,7 +253,6 @@ export function SellerProfile() {
                 Most Selling Products
               </h2>
             </div>
-
             <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
               {topSelling.map((product) => (
                 <ProductCard key={product.id} {...product} />
@@ -262,33 +282,34 @@ export function SellerProfile() {
               />
             </div>
 
-            {Object.entries(productsByCategory).map(([category, subcategories]) => (
-              <section key={category} className="mb-16">
-                <h2
-                  className="text-4xl text-[#FFF6F8] mb-6 capitalize"
-                  style={{ fontFamily: "Fredoka, sans-serif" }}
-                >
-                  {category}
-                </h2>
+            {Object.entries(productsByCategory).map(
+              ([category, subcategories]) => (
+                <section key={category} className="mb-16">
+                  <h2
+                    className="text-4xl text-[#FFF6F8] mb-6 capitalize"
+                    style={{ fontFamily: "Fredoka, sans-serif" }}
+                  >
+                    {category}
+                  </h2>
 
-                {Object.entries(subcategories).map(([subcategory, items]) => (
-                  <div key={subcategory} className="mb-10">
-                    <h3
-                      className="text-2xl text-[#C8B6E2] mb-4 capitalize pl-2 border-l-4 border-[#FF8FA3]"
-                      style={{ fontFamily: "Fredoka, sans-serif" }}
-                    >
-                      {subcategory}
-                    </h3>
-
-                    <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-                      {items.map((product) => (
-                        <ProductCard key={product.id} {...product} />
-                      ))}
+                  {Object.entries(subcategories).map(([subcategory, items]) => (
+                    <div key={subcategory} className="mb-10">
+                      <h3
+                        className="text-2xl text-[#C8B6E2] mb-4 capitalize pl-2 border-l-4 border-[#FF8FA3]"
+                        style={{ fontFamily: "Fredoka, sans-serif" }}
+                      >
+                        {subcategory}
+                      </h3>
+                      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        {items.map((product) => (
+                          <ProductCard key={product.id} {...product} />
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </section>
-            ))}
+                  ))}
+                </section>
+              )
+            )}
           </>
         )}
       </div>

@@ -27,24 +27,34 @@ export function Deals() {
   });
 
   const sellerProducts = products.filter((p) => p.sellerId === user?.id);
-
   const sortedDeals = useMemo(() => sortDeals(deals, sort), [deals, sort]);
 
+  // FIX: Pass productIds from dealForm into createDeal so the
+  // deal_products rows are actually inserted.
+  // Previously, handleCreateDeal received selectedProducts + originalPrice
+  // from CreateDealForm but never forwarded productIds to createDeal().
   const handleCreateDeal = (selectedProducts, originalPrice) => {
     createDeal(
       {
         title: dealForm.title,
-        products: selectedProducts,
+        // Pass the raw IDs so createDeal can insert deal_products rows
+        productIds: selectedProducts.map((p) => p.id),
         originalPrice,
         discountedPrice: Number(dealForm.discountedPrice),
         validDate: dealForm.validDate,
-        images: dealForm.images, // now base64 strings
+        images: dealForm.images,
       },
       user
     );
 
     setShowDealForm(false);
-    setDealForm({ title: "", productIds: [""], discountedPrice: "", validDate: "", images: [] });
+    setDealForm({
+      title: "",
+      productIds: [""],
+      discountedPrice: "",
+      validDate: "",
+      images: [],
+    });
   };
 
   const handleCreateDealClick = () => {
@@ -66,18 +76,31 @@ export function Deals() {
             className="w-full h-[240px] object-cover rounded-[20px] mb-4"
           />
         )}
-        <h2 className="text-3xl mb-4" style={{ fontFamily: "Pacifico", color: "#FFF6F8" }}>
+        <h2
+          className="text-3xl mb-4"
+          style={{ fontFamily: "Pacifico", color: "#FFF6F8" }}
+        >
           {deal.title}
         </h2>
-        <div className="flex flex-wrap gap-2 mb-4">
-          {deal.products.map((product) => (
-            <div key={product.id} className="px-3 py-2 rounded-full bg-white text-[#2E2A4A]">
-              {product.name} • {product.category}
-            </div>
-          ))}
-        </div>
+
+        {/* FIX: guard against deal.products being undefined/empty */}
+        {deal.products?.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-4">
+            {deal.products.map((product) => (
+              <div
+                key={product.id}
+                className="px-3 py-2 rounded-full bg-white text-[#2E2A4A]"
+              >
+                {product.name} • {product.category}
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="text-white">
-          <p>Original: Rs. {deal.originalPrice}</p>
+          {deal.originalPrice && (
+            <p>Original: Rs. {deal.originalPrice}</p>
+          )}
           <p className="text-2xl">Deal: Rs. {deal.discountedPrice}</p>
           <p className="text-white/80 mt-2">Valid Until: {deal.validDate}</p>
         </div>
@@ -85,7 +108,6 @@ export function Deals() {
     </Link>
   );
 
-  // Masonry-style column layout: cards in the next row start right under the shortest column
   const masonryClasses =
     "columns-1 md:columns-2 lg:columns-3 gap-6 [column-fill:_balance]";
 
@@ -100,12 +122,25 @@ export function Deals() {
           className="text-center mb-16"
         >
           <h1 className="text-5xl lg:text-7xl mb-4">
-            <span style={{ fontFamily: "Fredoka, sans-serif", color: "#FFF6F8" }}>Amazing </span>
-            <span style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3", textShadow: "0 0 30px rgba(255,143,163,0.6)" }}>
+            <span
+              style={{ fontFamily: "Fredoka, sans-serif", color: "#FFF6F8" }}
+            >
+              Amazing{" "}
+            </span>
+            <span
+              style={{
+                fontFamily: "Pacifico, cursive",
+                color: "#FF8FA3",
+                textShadow: "0 0 30px rgba(255,143,163,0.6)",
+              }}
+            >
               Deals
             </span>
           </h1>
-          <p className="text-xl text-[#FFF6F8]" style={{ fontFamily: "Inter, sans-serif" }}>
+          <p
+            className="text-xl text-[#FFF6F8]"
+            style={{ fontFamily: "Inter, sans-serif" }}
+          >
             Limited time offers on your favorite supplies
           </p>
 
@@ -144,16 +179,23 @@ export function Deals() {
             {!showDealForm && (
               <div className="text-center mb-12">
                 <p className="text-[#FFF6F8]/80">
-                  Seller accounts cannot purchase deals, but you can view and create them.
+                  Seller accounts cannot purchase deals, but you can view and
+                  create them.
                 </p>
               </div>
             )}
 
             {deals.length > 0 && (
               <>
-                <SortBar value={sort} onChange={setSort} options={["recent", "priceLow", "priceHigh", "discount"]} />
+                <SortBar
+                  value={sort}
+                  onChange={setSort}
+                  options={["recent", "priceLow", "priceHigh", "discount"]}
+                />
                 <div className={masonryClasses + " mt-2"}>
-                  {sortedDeals.map((deal) => <DealCard key={deal.id} deal={deal} />)}
+                  {sortedDeals.map((deal) => (
+                    <DealCard key={deal.id} deal={deal} />
+                  ))}
                 </div>
               </>
             )}
@@ -173,9 +215,15 @@ export function Deals() {
 
             {deals.length > 0 ? (
               <>
-                <SortBar value={sort} onChange={setSort} options={["recent", "priceLow", "priceHigh", "discount"]} />
+                <SortBar
+                  value={sort}
+                  onChange={setSort}
+                  options={["recent", "priceLow", "priceHigh", "discount"]}
+                />
                 <div className={masonryClasses}>
-                  {sortedDeals.map((deal) => <DealCard key={deal.id} deal={deal} />)}
+                  {sortedDeals.map((deal) => (
+                    <DealCard key={deal.id} deal={deal} />
+                  ))}
                 </div>
               </>
             ) : (
@@ -185,7 +233,6 @@ export function Deals() {
             )}
           </>
         )}
-
       </div>
 
       <ConfirmModal

@@ -1,9 +1,21 @@
+import { useEffect } from "react";
 import { motion } from "framer-motion";
 import logo from "../assets/logo.jpeg";
 import { FloatingElements } from "./FloatingElements";
 
 export function LogoTransition({ mode = "intro", onFinish }) {
   const isIntro = mode === "intro";
+
+  // Total visible time before we tell the parent to unmount us:
+  // intro: logo animates in (~0.6s) + glow pulses (~2.4s) + pause = ~4s total
+  // revisit: show briefly then slide away = ~1.5s
+  useEffect(() => {
+    const totalDuration = isIntro ? 4000 : 1500;
+    const timer = setTimeout(() => {
+      if (onFinish) onFinish();
+    }, totalDuration);
+    return () => clearTimeout(timer);
+  }, [isIntro, onFinish]);
 
   return (
     <motion.div
@@ -13,10 +25,6 @@ export function LogoTransition({ mode = "intro", onFinish }) {
       transition={{
         duration: 0.8,
         ease: "easeInOut",
-        delay: isIntro ? 3.75 : 2, // your timings
-      }}
-      onAnimationComplete={() => {
-        if (onFinish) onFinish(); // ✅ triggers removal AFTER animation
       }}
       className="fixed inset-0 z-[999] flex items-center justify-center overflow-hidden"
       style={{ backgroundColor: "#50426b" }}
@@ -27,7 +35,7 @@ export function LogoTransition({ mode = "intro", onFinish }) {
       {/* CENTER LOGO */}
       <div className="relative flex items-center justify-center z-10">
 
-        {/* 🔥 GLOW (ONLY ANIMATES ON INTRO, EXISTS ALWAYS) */}
+        {/* GLOW */}
         <motion.div
           className="absolute rounded-full"
           style={{
@@ -46,15 +54,17 @@ export function LogoTransition({ mode = "intro", onFinish }) {
                   ],
                 }
               : {
-                  boxShadow: "0 0 25px rgba(255,143,163,0.4)", // ✅ static glow for revisit
+                  boxShadow: "0 0 25px rgba(255,143,163,0.4)",
                 }
           }
-          transition={{ duration: 0.8,   // one glow cycle speed
-            repeat: isIntro ? 2 : 0,  // ✅ 3 times total (1 + 2 repeats)
-            ease: "easeInOut", }}
+          transition={{
+            duration: 0.8,
+            repeat: isIntro ? 2 : 0,
+            ease: "easeInOut",
+          }}
         />
 
-        {/* 🔥 LOGO CIRCLE (IDENTICAL FOR BOTH) */}
+        {/* LOGO CIRCLE */}
         <motion.div
           className="overflow-hidden rounded-full bg-[#50426b]"
           style={{
@@ -63,11 +73,7 @@ export function LogoTransition({ mode = "intro", onFinish }) {
             height: "55vw",
             maxHeight: "560px",
           }}
-          initial={
-            isIntro
-              ? { scale: 0.85, opacity: 0 }
-              : { scale: 1, opacity: 1 }
-          }
+          initial={isIntro ? { scale: 0.85, opacity: 0 } : { scale: 1, opacity: 1 }}
           animate={{ scale: 1, opacity: 1 }}
           transition={{ duration: isIntro ? 0.6 : 0 }}
         >

@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { supabase } from "../lib/supabase";
-
+import { resolveAvatar } from "../lib/avatars";
 const SellerContext = createContext();
 
 export function SellerProvider({ children }) {
@@ -30,18 +30,19 @@ export function SellerProvider({ children }) {
   }, [fetchSellers]);
 
   // ─── NORMALIZE PROFILE ROW → SELLER SHAPE ────────────────────
-  function normalizeSeller(p) {
-    return {
-      id: p.id,
-      name: p.name || "Unknown Seller",
-      image: p.avatar_url || null,
-      phone: p.phone || "",
-      email: p.contact_email || "",
-      jazzcashPhone: p.jazzcash_phone || "",
-      easypaisaPhone: p.easypaisa_phone || "",
-      role: p.role,
-    };
-  }
+  // change normalizeSeller:
+function normalizeSeller(p) {
+  return {
+    id: p.id,
+    name: p.name || "Unknown Seller",
+    image: resolveAvatar(p.avatar_url) || null,  // ← resolve here
+    phone: p.phone || "",
+    email: p.contact_email || "",
+    jazzcashPhone: p.jazzcash_phone || "",
+    easypaisaPhone: p.easypaisa_phone || "",
+    role: p.role,
+  };
+}
 
   // ─── GET SELLER BY ID (async, with cache) ─────────────────────
   const getSellerById = useCallback(async (id) => {

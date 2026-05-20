@@ -1,3 +1,4 @@
+// src/pages/SignUp.jsx
 import { motion } from "framer-motion";
 import { useState } from "react";
 import {
@@ -8,9 +9,11 @@ import {
   EyeOff,
   Mail,
   Smartphone,
+  Check,
 } from "lucide-react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { AVATARS, AVATAR_URLS } from "../lib/avatars";
 
 // ─── PHONE HELPERS ────────────────────────────────────────────
 const sanitizePhone = (value) => {
@@ -49,8 +52,90 @@ const validateContactEmail = (value) => {
   return "";
 };
 
-// ✅ Name is valid only if it contains letters (and spaces/hyphens for compound names)
 const hasInvalidNameChar = (value) => /[^a-zA-Z\s\-']/.test(value);
+
+// ─── AVATAR PICKER STEP ───────────────────────────────────────
+function AvatarPicker({ accountType, onSelect, onSkip }) {
+  const [selected, setSelected] = useState(null);
+
+  const isSellerType = accountType === "seller" || accountType === "both";
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="max-w-[700px] mx-auto"
+    >
+      <div className="text-center mb-8">
+        <h2
+          className="text-4xl mb-3"
+          style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3",
+            textShadow: "0 0 30px rgba(255,143,163,0.5)" }}
+        >
+          Pick Your Avatar
+        </h2>
+        <p className="text-[#FFF6F8]/80 text-lg">
+          {isSellerType
+            ? "This will be shown on your seller profile to buyers."
+            : "Choose a cute avatar for your account."}
+        </p>
+      </div>
+
+      <div className="rounded-[24px] bg-[#FFF6F8]/90 p-8">
+        <div className="grid grid-cols-4 gap-4 mb-8">
+          {AVATARS.map((avatar) => {
+            const isChosen = selected === avatar.id;
+            return (
+              <motion.button
+                key={avatar.id}
+                type="button"
+                whileHover={{ scale: 1.08 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={() => setSelected(avatar.id)}
+                className={`relative rounded-[20px] overflow-hidden border-4 transition-all duration-200 aspect-square
+                  ${isChosen
+                    ? "border-[#FF8FA3] shadow-lg shadow-[#FF8FA3]/30"
+                    : "border-transparent hover:border-[#C8B6E2]"
+                  }`}
+              >
+                <img
+                  src={AVATAR_URLS[avatar.id]}
+                  alt={avatar.label}
+                  className="w-full h-full object-cover"
+                />
+                {isChosen && (
+                  <div className="absolute inset-0 bg-[#FF8FA3]/20 flex items-center justify-center">
+                    <div className="w-8 h-8 rounded-full bg-[#FF8FA3] flex items-center justify-center shadow-lg">
+                      <Check className="w-5 h-5 text-white" />
+                    </div>
+                  </div>
+                )}
+              </motion.button>
+            );
+          })}
+        </div>
+
+        <div className="flex flex-col gap-3">
+          <button
+            type="button"
+            disabled={!selected}
+            onClick={() => onSelect(selected)}
+            className="w-full py-4 rounded-full bg-[#FF8FA3] text-white hover:scale-[1.02] transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-md"
+          >
+            {selected ? `Use this avatar →` : "Select an avatar above"}
+          </button>
+          <button
+            type="button"
+            onClick={() => onSkip()}
+            className="w-full py-3 rounded-full bg-transparent text-[#C8B6E2] hover:text-[#FF8FA3] transition-colors text-sm"
+          >
+            Skip for now
+          </button>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
 
 export function SignUp() {
   const { login, register, validateEmail } = useAuth();
@@ -59,7 +144,11 @@ export function SignUp() {
   const [searchParams] = useSearchParams();
   const mode = searchParams.get("mode") === "login" ? "login" : "signup";
 
+  // step: "type" | "avatar" | "form"
+  const [step, setStep] = useState("type");
   const [accountType, setAccountType] = useState(null);
+  const [chosenAvatar, setChosenAvatar] = useState(null);
+
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -85,7 +174,8 @@ export function SignUp() {
   const validateField = (field, value) => {
     if (field === "name" && mode === "signup") {
       if (!value) return "Name is required";
-      if (hasInvalidNameChar(value)) return "Name can only contain letters, spaces, hyphens, and apostrophes";
+      if (hasInvalidNameChar(value))
+        return "Name can only contain letters, spaces, hyphens, and apostrophes";
       return "";
     }
     if (field === "email") {
@@ -110,13 +200,22 @@ export function SignUp() {
   };
 
   const handleChange = (field, value) => {
-    // ✅ Block digits AND symbols in name (only letters, spaces, hyphens, apostrophes allowed)
     if (field === "name" && hasInvalidNameChar(value)) return;
-
     const phoneFields = ["phone", "jazzcashPhone", "easypaisaPhone"];
     const processed = phoneFields.includes(field) ? sanitizePhone(value) : value;
     setFormData((prev) => ({ ...prev, [field]: processed }));
     setErrors((prev) => ({ ...prev, [field]: validateField(field, processed) }));
+  };
+
+  // ─── HANDLE ACCOUNT TYPE SELECTION ───────────────────────────
+  const handleAccountTypeSelect = (type) => {
+    setAccountType(type);
+    // Only sellers/both get the avatar picker; buyers go straight to form
+    if (type === "seller" || type === "both") {
+      setStep("avatar");
+    } else {
+      setStep("form");
+    }
   };
 
   // ─── SUBMIT ──────────────────────────────────────────────────
@@ -129,12 +228,15 @@ export function SignUp() {
     if (mode === "signup") {
       if (!formData.name) newErrors.name = "Name is required";
       else if (hasInvalidNameChar(formData.name))
-        newErrors.name = "Name can only contain letters, spaces, hyphens, and apostrophes";
+        newErrors.name =
+          "Name can only contain letters, spaces, hyphens, and apostrophes";
     }
 
     if (!formData.email) newErrors.email = "Email is required";
-    else if (!formData.email.includes("@")) newErrors.email = "Email must include '@'";
-    else if (!validateEmail(formData.email)) newErrors.email = "Invalid email format";
+    else if (!formData.email.includes("@"))
+      newErrors.email = "Email must include '@'";
+    else if (!validateEmail(formData.email))
+      newErrors.email = "Invalid email format";
 
     if (!formData.password) newErrors.password = "Password is required";
     else if (!/[A-Z]/.test(formData.password))
@@ -170,7 +272,10 @@ export function SignUp() {
 
     // ── LOGIN flow ──
     if (mode === "login") {
-      const result = await login({ email: formData.email, password: formData.password });
+      const result = await login({
+        email: formData.email,
+        password: formData.password,
+      });
       setSubmitting(false);
       if (!result.success) { setError(result.message); return; }
       navigate("/");
@@ -193,10 +298,11 @@ export function SignUp() {
       contactEmail: formData.contactEmail,
       jazzcashPhone: formData.jazzcashPhone,
       easypaisaPhone: formData.easypaisaPhone,
+      // Pass the avatar id (e.g. "avatar3") — AuthContext stores it in avatar_url
+      avatarUrl: chosenAvatar || null,
     });
 
     setSubmitting(false);
-
     if (!result.success) { setError(result.message); return; }
     setEmailSent(true);
   };
@@ -214,39 +320,59 @@ export function SignUp() {
             <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#F6C1CC] to-[#C8B6E2] flex items-center justify-center mx-auto mb-6">
               <Mail className="w-10 h-10 text-white" />
             </div>
-
             <h1
-              style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3", textShadow: "0 0 30px rgba(255,143,163,0.6)" }}
+              style={{
+                fontFamily: "Pacifico, cursive",
+                color: "#FF8FA3",
+                textShadow: "0 0 30px rgba(255,143,163,0.6)",
+              }}
               className="text-4xl mb-3"
             >
               Check Your Email
             </h1>
-
-            <p className="text-[#7A6C9D] mb-2">We've sent a verification link to</p>
-            <p className="text-[#2E2A4A] font-medium mb-6">{formData.email}</p>
-
-            <div className="rounded-[16px] bg-[#EDE8F9] border-2 border-[#C8B6E2]/40 p-5 mb-8 text-left space-y-2">
-              <p className="text-[#7A6C9D] text-sm font-medium">What to do next:</p>
-              <p className="text-[#2E2A4A] text-sm">1. Open the email from LoomsLilly.</p>
-              <p className="text-[#2E2A4A] text-sm">2. Click the verification link inside.</p>
-              <p className="text-[#2E2A4A] text-sm">3. Come back here and log in.</p>
-            </div>
-
-            <p className="text-[#C8B6E2] text-xs mb-6">
-              Didn't receive it? Check your spam folder. The link expires in 24 hours.
+            <p className="text-[#7A6C9D] mb-2">
+              We've sent a verification link to
             </p>
-
+            <p className="text-[#2E2A4A] font-medium mb-6">{formData.email}</p>
+            <div className="rounded-[16px] bg-[#EDE8F9] border-2 border-[#C8B6E2]/40 p-5 mb-8 text-left space-y-2">
+              <p className="text-[#7A6C9D] text-sm font-medium">
+                What to do next:
+              </p>
+              <p className="text-[#2E2A4A] text-sm">
+                1. Open the email from LoomsLilly.
+              </p>
+              <p className="text-[#2E2A4A] text-sm">
+                2. Click the verification link inside.
+              </p>
+              <p className="text-[#2E2A4A] text-sm">
+                3. Come back here and log in.
+              </p>
+            </div>
+            <p className="text-[#C8B6E2] text-xs mb-6">
+              Didn't receive it? Check your spam folder. The link expires in 24
+              hours.
+            </p>
             <button
               onClick={() => navigate("/signup?mode=login")}
               className="w-full py-4 rounded-full bg-[#FF8FA3] text-white hover:scale-[1.02] transition-all shadow-md"
             >
               Go to Login
             </button>
-
             <button
               onClick={() => {
                 setEmailSent(false);
-                setFormData({ name: "", email: "", password: "", phone: "", contactEmail: "", jazzcashPhone: "", easypaisaPhone: "" });
+                setFormData({
+                  name: "",
+                  email: "",
+                  password: "",
+                  phone: "",
+                  contactEmail: "",
+                  jazzcashPhone: "",
+                  easypaisaPhone: "",
+                });
+                setStep("type");
+                setAccountType(null);
+                setChosenAvatar(null);
               }}
               className="mt-4 text-[#C8B6E2] text-sm hover:text-[#FF8FA3] transition-colors"
             >
@@ -258,16 +384,29 @@ export function SignUp() {
     );
   }
 
-  // ─── MAIN SIGNUP / LOGIN FORM ────────────────────────────────
+  // ─── MAIN RENDER ─────────────────────────────────────────────
   return (
     <div className="min-h-screen py-12 px-4 lg:px-20">
       <div className="max-w-[800px] mx-auto">
         <motion.div className="text-center mb-12">
           <h1 className="text-5xl lg:text-6xl mb-4">
-            <span style={{ fontFamily: "Fredoka, sans-serif", color: "#F4F1F8", fontWeight: 500, letterSpacing: "0.5px" }}>
+            <span
+              style={{
+                fontFamily: "Fredoka, sans-serif",
+                color: "#F4F1F8",
+                fontWeight: 500,
+                letterSpacing: "0.5px",
+              }}
+            >
               {mode === "login" ? "Log In " : "Join "}
             </span>
-            <span style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3", textShadow: "0 0 35px rgba(255, 143, 163, 0.7)" }}>
+            <span
+              style={{
+                fontFamily: "Pacifico, cursive",
+                color: "#FF8FA3",
+                textShadow: "0 0 35px rgba(255, 143, 163, 0.7)",
+              }}
+            >
               LoomsLilly
             </span>
           </h1>
@@ -278,14 +417,32 @@ export function SignUp() {
           </p>
         </motion.div>
 
-        {mode === "signup" && !accountType ? (
+        {/* ── STEP: ACCOUNT TYPE ── */}
+        {mode === "signup" && step === "type" && (
           <>
-            <h2 className="text-3xl text-center text-[#FFF6F8] mb-8">I want to...</h2>
+            <h2 className="text-3xl text-center text-[#FFF6F8] mb-8">
+              I want to...
+            </h2>
             <div className="grid md:grid-cols-3 gap-6">
               {[
-                { type: "buyer",  icon: ShoppingBag, label: "Buy",  description: "Shop for creative supplies" },
-                { type: "seller", icon: Store,        label: "Sell", description: "Share your handmade creations" },
-                { type: "both",   icon: Users,        label: "Both", description: "Buy and sell in the community" },
+                {
+                  type: "buyer",
+                  icon: ShoppingBag,
+                  label: "Buy",
+                  description: "Shop for creative supplies",
+                },
+                {
+                  type: "seller",
+                  icon: Store,
+                  label: "Sell",
+                  description: "Share your handmade creations",
+                },
+                {
+                  type: "both",
+                  icon: Users,
+                  label: "Both",
+                  description: "Buy and sell in the community",
+                },
               ].map((option, index) => (
                 <motion.button
                   key={option.type}
@@ -294,7 +451,7 @@ export function SignUp() {
                   transition={{ delay: index * 0.1 }}
                   whileHover={{ scale: 1.05, y: -8 }}
                   whileTap={{ scale: 0.95 }}
-                  onClick={() => setAccountType(option.type)}
+                  onClick={() => handleAccountTypeSelect(option.type)}
                   className="rounded-[24px] bg-[#FFF6F8]/90 backdrop-blur-sm border-2 border-[#7A6C9D]/20 p-8 shadow-xl hover:shadow-2xl transition-all duration-300"
                 >
                   <div className="flex flex-col items-center gap-4">
@@ -302,155 +459,291 @@ export function SignUp() {
                       <option.icon className="w-10 h-10 text-white" />
                     </div>
                     <h3 className="text-2xl text-[#2E2A4A]">{option.label}</h3>
-                    <p className="text-[#7A6C9D] text-center">{option.description}</p>
+                    <p className="text-[#7A6C9D] text-center">
+                      {option.description}
+                    </p>
                   </div>
                 </motion.button>
               ))}
             </div>
           </>
-        ) : (
-          <div className="rounded-[24px] bg-[#FFF6F8]/90 p-8">
-            {error && <p className="text-red-500 text-center mb-4">{error}</p>}
+        )}
 
-            <form onSubmit={handleSubmit} className="space-y-6">
-              {mode === "signup" && (
-                <div>
-                  <input
-                    placeholder="Full Name *"
-                    value={formData.name}
-                    onChange={(e) => handleChange("name", e.target.value)}
-                    className={inputStyle + (errors.name ? " border-red-400" : "")}
-                  />
-                  {errors.name && <p className="text-red-500 text-sm mt-1">{errors.name}</p>}
-                  <p className="text-[#C8B6E2] text-xs mt-1">Letters, spaces, hyphens and apostrophes only</p>
-                </div>
-              )}
+        {/* ── STEP: AVATAR PICKER (seller / both only) ── */}
+        {mode === "signup" && step === "avatar" && (
+          <>
+            <AvatarPicker
+              accountType={accountType}
+              onSelect={(avatarId) => {
+                setChosenAvatar(avatarId);
+                setStep("form");
+              }}
+              onSkip={() => {
+                setChosenAvatar(null);
+                setStep("form");
+              }}
+            />
+            <p className="text-center text-[#FFF6F8]/50 mt-4 text-sm">
+              <button
+                onClick={() => { setAccountType(null); setStep("type"); }}
+                className="hover:text-[#FF8FA3] transition-colors"
+              >
+                ← Change account type
+              </button>
+            </p>
+          </>
+        )}
 
-              <div>
-                <input
-                  placeholder="Email *"
-                  value={formData.email}
-                  onChange={(e) => handleChange("email", e.target.value)}
-                  className={inputStyle + (errors.email ? " border-red-400" : "")}
-                />
-                {errors.email && <p className="text-red-500 text-sm mt-1">{errors.email}</p>}
-              </div>
-
-              <div className="relative">
-                <input
-                  type={showPassword ? "text" : "password"}
-                  placeholder="Password *"
-                  value={formData.password}
-                  onChange={(e) => handleChange("password", e.target.value)}
-                  className={`${inputStyle} pr-12` + (errors.password ? " border-red-400" : "")}
+        {/* ── STEP: FORM ── */}
+        {(mode === "login" || step === "form") && (
+          <>
+            {/* Show chosen avatar preview at top of form */}
+            {mode === "signup" && chosenAvatar && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="flex flex-col items-center mb-6 gap-2"
+              >
+                <img
+                  src={AVATAR_URLS[chosenAvatar]}
+                  alt="Your avatar"
+                  className="w-20 h-20 rounded-full object-cover border-4 border-[#FF8FA3] shadow-lg"
                 />
                 <button
                   type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-[#7A6C9D] hover:text-[#FF8FA3]"
+                  onClick={() => setStep("avatar")}
+                  className="text-[#C8B6E2] text-xs hover:text-[#FF8FA3] transition-colors"
                 >
-                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  Change avatar
                 </button>
-                {errors.password && <p className="text-red-500 text-sm mt-1">{errors.password}</p>}
-              </div>
+              </motion.div>
+            )}
 
-              {mode === "signup" && (
-                <div className="rounded-[16px] bg-[#F6C1CC]/10 border-2 border-[#7A6C9D]/10 p-5 space-y-4">
-                  <p className="text-[#7A6C9D] text-sm font-medium">
-                    Contact Info{" "}
-                    <span className="text-xs text-[#C8B6E2]">(optional — used for checkout & events)</span>
-                  </p>
+            <div className="rounded-[24px] bg-[#FFF6F8]/90 p-8">
+              {error && (
+                <p className="text-red-500 text-center mb-4">{error}</p>
+              )}
 
+              <form onSubmit={handleSubmit} className="space-y-6">
+                {mode === "signup" && (
                   <div>
                     <input
-                      placeholder="Phone e.g. +923001234567 or 03001234567"
-                      value={formData.phone}
-                      onChange={(e) => handleChange("phone", e.target.value)}
-                      className={inputStyle + (errors.phone ? " border-red-400" : "")}
+                      placeholder="Full Name *"
+                      value={formData.name}
+                      onChange={(e) => handleChange("name", e.target.value)}
+                      className={
+                        inputStyle + (errors.name ? " border-red-400" : "")
+                      }
                     />
-                    {errors.phone && <p className="text-red-500 text-xs mt-1">{errors.phone}</p>}
+                    {errors.name && (
+                      <p className="text-red-500 text-sm mt-1">{errors.name}</p>
+                    )}
                     <p className="text-[#C8B6E2] text-xs mt-1">
-                      Accepted: +923001234567 · 03001234567 · +92211234567 · 0211234567
+                      Letters, spaces, hyphens and apostrophes only
                     </p>
                   </div>
+                )}
 
-                  <div>
-                    <input
-                      placeholder="Contact Email (if different from login email)"
-                      value={formData.contactEmail}
-                      onChange={(e) => handleChange("contactEmail", e.target.value)}
-                      className={inputStyle + (errors.contactEmail ? " border-red-400" : "")}
-                    />
-                    {errors.contactEmail && <p className="text-red-500 text-xs mt-1">{errors.contactEmail}</p>}
-                  </div>
+                <div>
+                  <input
+                    placeholder="Email *"
+                    value={formData.email}
+                    onChange={(e) => handleChange("email", e.target.value)}
+                    className={
+                      inputStyle + (errors.email ? " border-red-400" : "")
+                    }
+                  />
+                  {errors.email && (
+                    <p className="text-red-500 text-sm mt-1">{errors.email}</p>
+                  )}
                 </div>
-              )}
 
-              {/* ─── SELLER WALLET INFO ─── */}
-              {mode === "signup" && isSellerType && (
-                <div className="rounded-[16px] bg-[#EDE8F9]/40 border-2 border-[#C8B6E2]/40 p-5 space-y-4">
-                  <div className="flex items-start gap-2">
-                    <Smartphone className="w-5 h-5 text-[#7A6C9D] flex-shrink-0 mt-0.5" />
+                <div className="relative">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    placeholder="Password *"
+                    value={formData.password}
+                    onChange={(e) => handleChange("password", e.target.value)}
+                    className={
+                      `${inputStyle} pr-12` +
+                      (errors.password ? " border-red-400" : "")
+                    }
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-[#7A6C9D] hover:text-[#FF8FA3]"
+                  >
+                    {showPassword ? (
+                      <EyeOff className="w-5 h-5" />
+                    ) : (
+                      <Eye className="w-5 h-5" />
+                    )}
+                  </button>
+                  {errors.password && (
+                    <p className="text-red-500 text-sm mt-1">
+                      {errors.password}
+                    </p>
+                  )}
+                </div>
+
+                {mode === "signup" && (
+                  <div className="rounded-[16px] bg-[#F6C1CC]/10 border-2 border-[#7A6C9D]/10 p-5 space-y-4">
+                    <p className="text-[#7A6C9D] text-sm font-medium">
+                      Contact Info{" "}
+                      <span className="text-xs text-[#C8B6E2]">
+                        (optional — used for checkout &amp; events)
+                      </span>
+                    </p>
                     <div>
-                      <p className="text-[#7A6C9D] text-sm font-medium">Seller Wallet Info</p>
-                      <p className="text-xs text-[#C8B6E2] mt-1">
-                        Buyers will see your wallet number(s) when they pay with JazzCash or EasyPaisa.
-                        You need at least one — both is best.
+                      <input
+                        placeholder="Phone e.g. +923001234567 or 03001234567"
+                        value={formData.phone}
+                        onChange={(e) => handleChange("phone", e.target.value)}
+                        className={
+                          inputStyle + (errors.phone ? " border-red-400" : "")
+                        }
+                      />
+                      {errors.phone && (
+                        <p className="text-red-500 text-xs mt-1">
+                          {errors.phone}
+                        </p>
+                      )}
+                      <p className="text-[#C8B6E2] text-xs mt-1">
+                        Accepted: +923001234567 · 03001234567 · +92211234567 ·
+                        0211234567
                       </p>
                     </div>
-                  </div>
-
-                  {errors.walletRequired && (
-                    <div className="rounded-[12px] bg-red-50 border border-red-200 p-3">
-                      <p className="text-red-500 text-sm">{errors.walletRequired}</p>
+                    <div>
+                      <input
+                        placeholder="Contact Email (if different from login email)"
+                        value={formData.contactEmail}
+                        onChange={(e) =>
+                          handleChange("contactEmail", e.target.value)
+                        }
+                        className={
+                          inputStyle +
+                          (errors.contactEmail ? " border-red-400" : "")
+                        }
+                      />
+                      {errors.contactEmail && (
+                        <p className="text-red-500 text-xs mt-1">
+                          {errors.contactEmail}
+                        </p>
+                      )}
                     </div>
-                  )}
-
-                  <div>
-                    <label className="block text-[#7A6C9D] text-xs mb-1">JazzCash Phone</label>
-                    <input
-                      placeholder="e.g. 03001234567"
-                      value={formData.jazzcashPhone}
-                      onChange={(e) => handleChange("jazzcashPhone", e.target.value)}
-                      className={inputStyle + (errors.jazzcashPhone ? " border-red-400" : "")}
-                    />
-                    {errors.jazzcashPhone && <p className="text-red-500 text-xs mt-1">{errors.jazzcashPhone}</p>}
                   </div>
+                )}
 
-                  <div>
-                    <label className="block text-[#7A6C9D] text-xs mb-1">EasyPaisa Phone</label>
-                    <input
-                      placeholder="e.g. 03001234567"
-                      value={formData.easypaisaPhone}
-                      onChange={(e) => handleChange("easypaisaPhone", e.target.value)}
-                      className={inputStyle + (errors.easypaisaPhone ? " border-red-400" : "")}
-                    />
-                    {errors.easypaisaPhone && <p className="text-red-500 text-xs mt-1">{errors.easypaisaPhone}</p>}
+                {/* ─── SELLER WALLET INFO ─── */}
+                {mode === "signup" && isSellerType && (
+                  <div className="rounded-[16px] bg-[#EDE8F9]/40 border-2 border-[#C8B6E2]/40 p-5 space-y-4">
+                    <div className="flex items-start gap-2">
+                      <Smartphone className="w-5 h-5 text-[#7A6C9D] flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-[#7A6C9D] text-sm font-medium">
+                          Seller Wallet Info
+                        </p>
+                        <p className="text-xs text-[#C8B6E2] mt-1">
+                          Buyers will see your wallet number(s) when they pay
+                          with JazzCash or EasyPaisa. You need at least one —
+                          both is best.
+                        </p>
+                      </div>
+                    </div>
+
+                    {errors.walletRequired && (
+                      <div className="rounded-[12px] bg-red-50 border border-red-200 p-3">
+                        <p className="text-red-500 text-sm">
+                          {errors.walletRequired}
+                        </p>
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-[#7A6C9D] text-xs mb-1">
+                        JazzCash Phone
+                      </label>
+                      <input
+                        placeholder="e.g. 03001234567"
+                        value={formData.jazzcashPhone}
+                        onChange={(e) =>
+                          handleChange("jazzcashPhone", e.target.value)
+                        }
+                        className={
+                          inputStyle +
+                          (errors.jazzcashPhone ? " border-red-400" : "")
+                        }
+                      />
+                      {errors.jazzcashPhone && (
+                        <p className="text-red-500 text-xs mt-1">
+                          {errors.jazzcashPhone}
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-[#7A6C9D] text-xs mb-1">
+                        EasyPaisa Phone
+                      </label>
+                      <input
+                        placeholder="e.g. 03001234567"
+                        value={formData.easypaisaPhone}
+                        onChange={(e) =>
+                          handleChange("easypaisaPhone", e.target.value)
+                        }
+                        className={
+                          inputStyle +
+                          (errors.easypaisaPhone ? " border-red-400" : "")
+                        }
+                      />
+                      {errors.easypaisaPhone && (
+                        <p className="text-red-500 text-xs mt-1">
+                          {errors.easypaisaPhone}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              <button
-                type="submit"
-                disabled={submitting}
-                className="w-full py-4 rounded-full bg-[#FF8FA3] text-white hover:scale-[1.02] transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {submitting
-                  ? mode === "login" ? "Logging in..." : "Creating account..."
-                  : mode === "login" ? "Log In" : "Create Account"}
-              </button>
-            </form>
-          </div>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="w-full py-4 rounded-full bg-[#FF8FA3] text-white hover:scale-[1.02] transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {submitting
+                    ? mode === "login"
+                      ? "Logging in..."
+                      : "Creating account..."
+                    : mode === "login"
+                    ? "Log In"
+                    : "Create Account"}
+                </button>
+              </form>
+            </div>
+          </>
         )}
 
         <p className="text-center text-[#FFF6F8]/70 mt-6 text-sm">
           {mode === "login" ? (
-            <>Don't have an account?{" "}
-              <button onClick={() => navigate("/signup")} className="text-[#FF8FA3] hover:underline">Sign up</button>
+            <>
+              Don't have an account?{" "}
+              <button
+                onClick={() => navigate("/signup")}
+                className="text-[#FF8FA3] hover:underline"
+              >
+                Sign up
+              </button>
             </>
           ) : (
-            <>Already have an account?{" "}
-              <button onClick={() => navigate("/signup?mode=login")} className="text-[#FF8FA3] hover:underline">Log in</button>
+            <>
+              Already have an account?{" "}
+              <button
+                onClick={() => navigate("/signup?mode=login")}
+                className="text-[#FF8FA3] hover:underline"
+              >
+                Log in
+              </button>
             </>
           )}
         </p>

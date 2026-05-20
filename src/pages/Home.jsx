@@ -1,9 +1,12 @@
 // src/pages/Home.jsx
+// add this import at the top of Home.jsx
+import { resolveAvatar } from "../lib/avatars";
 import { useState, useEffect, useRef } from "react";
 import { useSellers } from "../context/SellerContext";
 import { useProducts } from "../context/ProductContext";
 import { CategoryCard } from "../components/CategoryCard";
 import { ProductCard } from "../components/ProductCard";
+
 import {
   Scissors, Palette, BookOpen, Tag, Users, Calendar, Sparkles, TrendingUp, User,
   MessageCircle, Mail, Phone, Clock,
@@ -229,24 +232,24 @@ export function Home() {
               </span>
             </h2>
             <div className="flex justify-center gap-8 flex-wrap">
-              {rankedSellers.map((seller) => (
-                <motion.div
-                  key={seller.id}
-                  whileHover={{ scale: 1.1 }}
-                  onClick={() => navigate(`/seller/${seller.id}`)}
-                  className="cursor-pointer text-center"
-                >
-                  <div className="w-24 h-24 rounded-full bg-gradient-to-br from-[#F6C1CC] to-[#C8B6E2] flex items-center justify-center overflow-hidden">
-                    {seller.image ? (
-                      <img src={seller.image} className="w-full h-full object-cover" alt="" />
-                    ) : (
-                      <User className="text-white" />
-                    )}
-                  </div>
-                  <p className="text-[#2E2A4A] mt-2 text-sm">{seller.name}</p>
-                </motion.div>
-              ))}
-            </div>
+  {rankedSellers.map((seller) => (
+    <motion.div
+      key={seller.id}
+      whileHover={{ scale: 1.1 }}
+      onClick={() => navigate(`/seller/${seller.id}`)}
+      className="cursor-pointer text-center"
+    >
+      <div className="w-24 h-24 rounded-full bg-gradient-to-br from-[#F6C1CC] to-[#C8B6E2] flex items-center justify-center overflow-hidden">
+        {seller.image ? (
+          <img src={seller.image} className="w-full h-full object-cover object-center" alt="" />
+        ) : (
+          <User className="text-white" size={36} />
+        )}
+      </div>
+      <p className="text-[#2E2A4A] mt-2 text-sm">{seller.name}</p>
+    </motion.div>
+  ))}
+</div>
           </motion.div>
         </div>
       </section>

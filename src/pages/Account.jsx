@@ -1,10 +1,12 @@
+// src/pages/Account.jsx
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "../context/AuthContext";
 import { useProducts } from "../context/ProductContext";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Smartphone } from "lucide-react";
+import { Smartphone, Check, User } from "lucide-react";
 import { supabase } from "../lib/supabase";
+import { AVATARS, AVATAR_URLS, resolveAvatar } from "../lib/avatars";
 
 function Modal({ isOpen, onClose, children }) {
   return (
@@ -15,7 +17,9 @@ function Modal({ isOpen, onClose, children }) {
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           className="fixed inset-0 z-[200] flex items-center justify-center px-4 bg-black/50 backdrop-blur-md"
-          onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) onClose();
+          }}
         >
           <motion.div
             initial={{ scale: 0.85, opacity: 0, y: -10 }}
@@ -25,6 +29,102 @@ function Modal({ isOpen, onClose, children }) {
             className="w-full max-w-[440px] rounded-[24px] bg-[#FFF6F8] p-10 shadow-2xl border-2 border-[#FF8FA3]/40 text-center"
           >
             {children}
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+// ─── AVATAR CHANGE MODAL ─────────────────────────────────────
+function AvatarModal({ isOpen, onClose, currentAvatar, onSave }) {
+  const [selected, setSelected] = useState(currentAvatar || null);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    await onSave(selected);
+    setSaving(false);
+    onClose();
+  };
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[200] flex items-center justify-center px-4 bg-black/50 backdrop-blur-md"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) onClose();
+          }}
+        >
+          <motion.div
+            initial={{ scale: 0.85, opacity: 0, y: -10 }}
+            animate={{ scale: 1, opacity: 1, y: 0 }}
+            exit={{ scale: 0.85, opacity: 0, y: -10 }}
+            transition={{ type: "spring", stiffness: 300, damping: 28 }}
+            className="w-full max-w-[520px] rounded-[24px] bg-[#FFF6F8] p-8 shadow-2xl border-2 border-[#FF8FA3]/40"
+          >
+            <h2
+              style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3" }}
+              className="text-2xl mb-2 text-center"
+            >
+              Change Avatar
+            </h2>
+            <p className="text-[#7A6C9D] text-sm text-center mb-6">
+              Pick a new avatar to display on your profile.
+            </p>
+
+            <div className="grid grid-cols-4 gap-3 mb-6">
+              {AVATARS.map((avatar) => {
+                const isChosen = selected === avatar.id;
+                return (
+                  <motion.button
+                    key={avatar.id}
+                    type="button"
+                    whileHover={{ scale: 1.08 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => setSelected(avatar.id)}
+                    className={`relative rounded-[16px] overflow-hidden border-4 transition-all duration-200 aspect-square
+                      ${isChosen
+                        ? "border-[#FF8FA3] shadow-lg shadow-[#FF8FA3]/30"
+                        : "border-transparent hover:border-[#C8B6E2]"
+                      }`}
+                  >
+                    <img
+                      src={AVATAR_URLS[avatar.id]}
+                      alt={avatar.label}
+                      className="w-full h-full object-cover"
+                    />
+                    {isChosen && (
+                      <div className="absolute inset-0 bg-[#FF8FA3]/20 flex items-center justify-center">
+                        <div className="w-7 h-7 rounded-full bg-[#FF8FA3] flex items-center justify-center">
+                          <Check className="w-4 h-4 text-white" />
+                        </div>
+                      </div>
+                    )}
+                  </motion.button>
+                );
+              })}
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={onClose}
+                className="flex-1 py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] hover:scale-105 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving || !selected}
+                className="flex-1 py-3 rounded-full bg-[#FF8FA3] text-white hover:scale-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {saving ? "Saving..." : "Save Avatar"}
+              </button>
+            </div>
           </motion.div>
         </motion.div>
       )}
@@ -70,6 +170,7 @@ export function Account() {
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showAvatarModal, setShowAvatarModal] = useState(false);
   const [pendingUpdate, setPendingUpdate] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -77,7 +178,10 @@ export function Account() {
   const [emailChangeError, setEmailChangeError] = useState("");
   const [newEmailInput, setNewEmailInput] = useState("");
 
-  const [passwordForm, setPasswordForm] = useState({ newPassword: "", confirmPassword: "" });
+  const [passwordForm, setPasswordForm] = useState({
+    newPassword: "",
+    confirmPassword: "",
+  });
   const [passwordError, setPasswordError] = useState("");
   const [loggingOut, setLoggingOut] = useState(false);
 
@@ -88,8 +192,28 @@ export function Account() {
   const isSeller = role === "seller" || role === "both";
 
   const switchingToSeller =
-    (form.role === "seller" || form.role === "both") &&
-    user?.role === "buyer";
+    (form.role === "seller" || form.role === "both") && user?.role === "buyer";
+
+  const avatarSrc = resolveAvatar(user?.avatarUrl || user?.avatar_url);
+
+  // ─── SAVE AVATAR ─────────────────────────────────────────────
+  const handleAvatarSave = async (avatarId) => {
+    if (!avatarId || !user?.id) return;
+    // Update in Supabase
+    const { error } = await supabase
+      .from("profiles")
+      .update({ avatar_url: avatarId })
+      .eq("id", user.id);
+
+    if (error) {
+      console.error("avatar update error:", error.message);
+      return;
+    }
+    // Update local user state via AuthContext
+    await updateUser({ avatarUrl: avatarId });
+    setSaveSuccess(true);
+    setTimeout(() => setSaveSuccess(false), 3000);
+  };
 
   const validateField = (field, value) => {
     if (field === "name") {
@@ -132,7 +256,8 @@ export function Account() {
       if (form.jazzcashPhone && jcErr) newErrors.jazzcashPhone = jcErr;
       if (form.easypaisaPhone && epErr) newErrors.easypaisaPhone = epErr;
       if (!form.jazzcashPhone && !form.easypaisaPhone) {
-        newErrors.walletRequired = "Please provide at least one wallet number so buyers can pay you.";
+        newErrors.walletRequired =
+          "Please provide at least one wallet number so buyers can pay you.";
       }
     }
     if (Object.keys(newErrors).length > 0) { setErrors(newErrors); return; }
@@ -158,12 +283,6 @@ export function Account() {
     setTimeout(() => setSaveSuccess(false), 3000);
   };
 
-  // ─── ROLE CHANGE CONFIRM ──────────────────────────────────────
-  // FIX: delete products directly from Supabase in one query,
-  // then refresh the ProductContext cache, then update the role.
-  // This avoids the race between deleteProduct (which calls fetchProducts)
-  // and updateUser (which triggers re-render with new role before
-  // products are removed from local state).
   const confirmRoleChange = async () => {
     const switchingToBuyer =
       pendingUpdate?.role === "buyer" &&
@@ -173,8 +292,6 @@ export function Account() {
     setShowConfirmModal(false);
 
     if (switchingToBuyer) {
-      // Delete all products for this seller directly from Supabase.
-      // CASCADE on product_images and product_likes handles related rows.
       const { error } = await supabase
         .from("products")
         .delete()
@@ -185,13 +302,9 @@ export function Account() {
         setRoleChanging(false);
         return;
       }
-
-      // Refresh the local products cache so the UI reflects the deletion
-      // before the role update triggers a re-render.
       await fetchProducts();
     }
 
-    // Now update the role — products are already gone from local state
     await updateUser(pendingUpdate);
     setPendingUpdate(null);
     setIsEditing(false);
@@ -219,7 +332,8 @@ export function Account() {
     if (!value) return "New password required";
     if (!/[A-Z]/.test(value)) return "Must include at least one capital letter";
     if (!/[^A-Za-z0-9]/.test(value)) return "Must include at least one symbol";
-    if ((value.match(/\d/g) || []).length < 2) return "Must include at least two numbers";
+    if ((value.match(/\d/g) || []).length < 2)
+      return "Must include at least two numbers";
     return "";
   };
 
@@ -231,7 +345,9 @@ export function Account() {
       setPasswordError("Passwords don't match");
       return;
     }
-    const { error } = await supabase.auth.updateUser({ password: passwordForm.newPassword });
+    const { error } = await supabase.auth.updateUser({
+      password: passwordForm.newPassword,
+    });
     if (error) { setPasswordError(error.message); return; }
     setShowPasswordModal(false);
     setPasswordForm({ newPassword: "", confirmPassword: "" });
@@ -261,17 +377,25 @@ export function Account() {
   };
 
   const pendingRole = pendingUpdate?.role;
-  const switchingToBuyerConfirm = pendingRole === "buyer" && (user?.role === "seller" || user?.role === "both");
-  const onlySellerSwitchingToBuyer = pendingRole === "buyer" && user?.role === "seller";
+  const switchingToBuyerConfirm =
+    pendingRole === "buyer" &&
+    (user?.role === "seller" || user?.role === "both");
+  const onlySellerSwitchingToBuyer =
+    pendingRole === "buyer" && user?.role === "seller";
 
   return (
     <div className="min-h-screen py-12 px-4 lg:px-20">
       <div className="max-w-[800px] mx-auto">
-
         <div className="text-center mb-12">
           <h1 className="text-5xl lg:text-6xl mb-4">
             <span style={{ color: "#FFF6F8" }}>Your </span>
-            <span style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3", textShadow: "0 0 35px rgba(255,143,163,0.7)" }}>
+            <span
+              style={{
+                fontFamily: "Pacifico, cursive",
+                color: "#FF8FA3",
+                textShadow: "0 0 35px rgba(255,143,163,0.7)",
+              }}
+            >
               Account
             </span>
           </h1>
@@ -291,6 +415,30 @@ export function Account() {
 
         {!isEditing ? (
           <div className="rounded-[24px] bg-[#FFF6F8]/90 p-8 shadow-2xl space-y-6">
+
+            {/* ─── AVATAR DISPLAY ─── */}
+            <div className="flex flex-col items-center gap-3 pb-4 border-b border-[#F6C1CC]/40">
+              <div className="relative">
+                <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-[#FF8FA3]/40 shadow-lg bg-gradient-to-br from-[#F6C1CC] to-[#C8B6E2] flex items-center justify-center">
+                  {avatarSrc ? (
+                    <img
+                      src={avatarSrc}
+                      alt="Your avatar"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <User className="w-10 h-10 text-white" />
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={() => setShowAvatarModal(true)}
+                className="px-5 py-2 rounded-full bg-[#F6C1CC]/40 text-[#7A6C9D] text-sm hover:bg-[#FF8FA3] hover:text-white transition-all hover:scale-105"
+              >
+                {avatarSrc ? "Change Avatar" : "Pick an Avatar"}
+              </button>
+            </div>
+
             <div>
               <p className="text-[#7A6C9D]">Name</p>
               <h2 className="text-2xl text-[#2E2A4A]">{user?.name}</h2>
@@ -312,8 +460,16 @@ export function Account() {
             {isSeller && (user?.jazzcashPhone || user?.easypaisaPhone) && (
               <div>
                 <p className="text-[#7A6C9D] mb-1">Wallet Numbers</p>
-                {user.jazzcashPhone && <p className="text-[#2E2A4A] text-sm">JazzCash: {user.jazzcashPhone}</p>}
-                {user.easypaisaPhone && <p className="text-[#2E2A4A] text-sm">EasyPaisa: {user.easypaisaPhone}</p>}
+                {user.jazzcashPhone && (
+                  <p className="text-[#2E2A4A] text-sm">
+                    JazzCash: {user.jazzcashPhone}
+                  </p>
+                )}
+                {user.easypaisaPhone && (
+                  <p className="text-[#2E2A4A] text-sm">
+                    EasyPaisa: {user.easypaisaPhone}
+                  </p>
+                )}
               </div>
             )}
 
@@ -337,30 +493,67 @@ export function Account() {
 
             <div className="flex flex-col gap-3">
               {isBuyer && (
-                <button onClick={() => navigate("/my-orders")} className="w-full py-3 rounded-full bg-[#FF8FA3] text-white hover:scale-105 transition-all">
+                <button
+                  onClick={() => navigate("/my-orders")}
+                  className="w-full py-3 rounded-full bg-[#FF8FA3] text-white hover:scale-105 transition-all"
+                >
                   📦 My Orders
                 </button>
               )}
               {isSeller && (
-                <button onClick={() => navigate("/my-sales")} className="w-full py-3 rounded-full bg-[#FF8FA3] text-white hover:scale-105 transition-all">
+                <button
+                  onClick={() => navigate("/my-sales")}
+                  className="w-full py-3 rounded-full bg-[#FF8FA3] text-white hover:scale-105 transition-all"
+                >
                   💰 My Sales
                 </button>
               )}
-              <button onClick={() => navigate("/wishlist")} className="w-full py-3 rounded-full bg-[#FF8FA3]/70 text-white hover:scale-105 transition-all">
+              <button
+                onClick={() => navigate("/wishlist")}
+                className="w-full py-3 rounded-full bg-[#FF8FA3]/70 text-white hover:scale-105 transition-all"
+              >
                 ❤️ My Wishlist
               </button>
-              <button onClick={() => navigate("/my-activity")} className="w-full py-3 rounded-full bg-[#FF8FA3]/70 text-white hover:scale-105 transition-all">
+              <button
+                onClick={() => navigate("/my-activity")}
+                className="w-full py-3 rounded-full bg-[#FF8FA3]/70 text-white hover:scale-105 transition-all"
+              >
                 📊 My Activity
               </button>
               {isSeller && (
                 <>
-                  <button onClick={() => navigate("/my-products")} className="w-full py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] hover:scale-105 transition-all">My Products</button>
-                  <button onClick={() => navigate("/my-deals")} className="w-full py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] hover:scale-105 transition-all">My Deals</button>
+                  <button
+                    onClick={() => navigate("/my-products")}
+                    className="w-full py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] hover:scale-105 transition-all"
+                  >
+                    My Products
+                  </button>
+                  <button
+                    onClick={() => navigate("/my-deals")}
+                    className="w-full py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] hover:scale-105 transition-all"
+                  >
+                    My Deals
+                  </button>
                 </>
               )}
-              <button onClick={() => navigate("/my-tutorials")} className="w-full py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] hover:scale-105 transition-all">My Tutorials</button>
-              <button onClick={() => navigate("/my-events")} className="w-full py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] hover:scale-105 transition-all">My Events</button>
-              <button onClick={() => navigate("/my-discussions")} className="w-full py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] hover:scale-105 transition-all">My Discussions</button>
+              <button
+                onClick={() => navigate("/my-tutorials")}
+                className="w-full py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] hover:scale-105 transition-all"
+              >
+                My Tutorials
+              </button>
+              <button
+                onClick={() => navigate("/my-events")}
+                className="w-full py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] hover:scale-105 transition-all"
+              >
+                My Events
+              </button>
+              <button
+                onClick={() => navigate("/my-discussions")}
+                className="w-full py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] hover:scale-105 transition-all"
+              >
+                My Discussions
+              </button>
 
               <button
                 onClick={handleLogout}
@@ -370,7 +563,10 @@ export function Account() {
                 {loggingOut ? "Logging out..." : "Log Out"}
               </button>
 
-              <button onClick={() => setShowDeleteModal(true)} className="w-full py-3 mt-2 rounded-full border-2 border-red-300 text-red-400 hover:bg-red-50 hover:scale-105 transition-all">
+              <button
+                onClick={() => setShowDeleteModal(true)}
+                className="w-full py-3 mt-2 rounded-full border-2 border-red-300 text-red-400 hover:bg-red-50 hover:scale-105 transition-all"
+              >
                 Delete Account
               </button>
             </div>
@@ -378,14 +574,18 @@ export function Account() {
         ) : (
           <div className="rounded-[24px] bg-[#FFF6F8]/90 p-8 shadow-2xl space-y-5">
             <div>
-              <label className="block text-[#7A6C9D] text-xs mb-1">Full Name *</label>
+              <label className="block text-[#7A6C9D] text-xs mb-1">
+                Full Name *
+              </label>
               <input
                 placeholder="Full Name"
                 value={form.name}
                 onChange={(e) => handleChange("name", e.target.value)}
                 className={inputStyle + (errors.name ? " border-red-400" : "")}
               />
-              {errors.name && <p className="text-red-500 text-sm mt-1">{errors.name}</p>}
+              {errors.name && (
+                <p className="text-red-500 text-sm mt-1">{errors.name}</p>
+              )}
             </div>
 
             <div>
@@ -394,17 +594,27 @@ export function Account() {
                 <input
                   value={user?.email}
                   readOnly
-                  className={inputStyle + " bg-gray-100 text-gray-400 cursor-not-allowed flex-1"}
+                  className={
+                    inputStyle +
+                    " bg-gray-100 text-gray-400 cursor-not-allowed flex-1"
+                  }
                 />
                 <button
                   type="button"
-                  onClick={() => { setNewEmailInput(""); setEmailVerifySent(false); setEmailChangeError(""); setShowEmailModal(true); }}
+                  onClick={() => {
+                    setNewEmailInput("");
+                    setEmailVerifySent(false);
+                    setEmailChangeError("");
+                    setShowEmailModal(true);
+                  }}
                   className="px-4 py-3 rounded-[16px] bg-[#FF8FA3] text-white text-sm whitespace-nowrap hover:scale-105 transition-all"
                 >
                   Change
                 </button>
               </div>
-              <p className="text-[#C8B6E2] text-xs mt-1">Email changes require verification of your new address.</p>
+              <p className="text-[#C8B6E2] text-xs mt-1">
+                Email changes require verification of your new address.
+              </p>
             </div>
 
             <div>
@@ -415,22 +625,34 @@ export function Account() {
                 onChange={(e) => handleChange("phone", e.target.value)}
                 className={inputStyle + (errors.phone ? " border-red-400" : "")}
               />
-              {errors.phone && <p className="text-red-500 text-sm mt-1">{errors.phone}</p>}
+              {errors.phone && (
+                <p className="text-red-500 text-sm mt-1">{errors.phone}</p>
+              )}
             </div>
 
             <div>
-              <label className="block text-[#7A6C9D] text-xs mb-1">Contact Email (optional)</label>
+              <label className="block text-[#7A6C9D] text-xs mb-1">
+                Contact Email (optional)
+              </label>
               <input
                 placeholder="Visible to buyers for contact"
                 value={form.contactEmail}
                 onChange={(e) => handleChange("contactEmail", e.target.value)}
-                className={inputStyle + (errors.contactEmail ? " border-red-400" : "")}
+                className={
+                  inputStyle + (errors.contactEmail ? " border-red-400" : "")
+                }
               />
-              {errors.contactEmail && <p className="text-red-500 text-sm mt-1">{errors.contactEmail}</p>}
+              {errors.contactEmail && (
+                <p className="text-red-500 text-sm mt-1">
+                  {errors.contactEmail}
+                </p>
+              )}
             </div>
 
             <div>
-              <label className="block text-[#7A6C9D] text-xs mb-1">Account Type</label>
+              <label className="block text-[#7A6C9D] text-xs mb-1">
+                Account Type
+              </label>
               <select
                 value={form.role}
                 onChange={(e) => setForm({ ...form, role: e.target.value })}
@@ -447,9 +669,12 @@ export function Account() {
                 <div className="flex items-start gap-2">
                   <Smartphone className="w-5 h-5 text-[#7A6C9D] flex-shrink-0 mt-0.5" />
                   <div>
-                    <p className="text-[#7A6C9D] text-sm font-medium">Seller Wallet Info</p>
+                    <p className="text-[#7A6C9D] text-sm font-medium">
+                      Seller Wallet Info
+                    </p>
                     <p className="text-xs text-[#C8B6E2] mt-1">
-                      Buyers see these numbers when paying with JazzCash or EasyPaisa.
+                      Buyers see these numbers when paying with JazzCash or
+                      EasyPaisa.
                     </p>
                   </div>
                 </div>
@@ -459,24 +684,46 @@ export function Account() {
                   </div>
                 )}
                 <div>
-                  <label className="block text-[#7A6C9D] text-xs mb-1">JazzCash Phone</label>
+                  <label className="block text-[#7A6C9D] text-xs mb-1">
+                    JazzCash Phone
+                  </label>
                   <input
                     placeholder="e.g. 03001234567"
                     value={form.jazzcashPhone}
-                    onChange={(e) => handleChange("jazzcashPhone", e.target.value)}
-                    className={inputStyle + (errors.jazzcashPhone ? " border-red-400" : "")}
+                    onChange={(e) =>
+                      handleChange("jazzcashPhone", e.target.value)
+                    }
+                    className={
+                      inputStyle +
+                      (errors.jazzcashPhone ? " border-red-400" : "")
+                    }
                   />
-                  {errors.jazzcashPhone && <p className="text-red-500 text-xs mt-1">{errors.jazzcashPhone}</p>}
+                  {errors.jazzcashPhone && (
+                    <p className="text-red-500 text-xs mt-1">
+                      {errors.jazzcashPhone}
+                    </p>
+                  )}
                 </div>
                 <div>
-                  <label className="block text-[#7A6C9D] text-xs mb-1">EasyPaisa Phone</label>
+                  <label className="block text-[#7A6C9D] text-xs mb-1">
+                    EasyPaisa Phone
+                  </label>
                   <input
                     placeholder="e.g. 03001234567"
                     value={form.easypaisaPhone}
-                    onChange={(e) => handleChange("easypaisaPhone", e.target.value)}
-                    className={inputStyle + (errors.easypaisaPhone ? " border-red-400" : "")}
+                    onChange={(e) =>
+                      handleChange("easypaisaPhone", e.target.value)
+                    }
+                    className={
+                      inputStyle +
+                      (errors.easypaisaPhone ? " border-red-400" : "")
+                    }
                   />
-                  {errors.easypaisaPhone && <p className="text-red-500 text-xs mt-1">{errors.easypaisaPhone}</p>}
+                  {errors.easypaisaPhone && (
+                    <p className="text-red-500 text-xs mt-1">
+                      {errors.easypaisaPhone}
+                    </p>
+                  )}
                 </div>
               </div>
             )}
@@ -489,95 +736,257 @@ export function Account() {
               Change Password
             </button>
 
-            <button onClick={handleSave} className="w-full py-3 rounded-full bg-[#FF8FA3] text-white hover:scale-105 transition-all">
+            <button
+              onClick={handleSave}
+              className="w-full py-3 rounded-full bg-[#FF8FA3] text-white hover:scale-105 transition-all"
+            >
               Save Changes
             </button>
 
-            <button onClick={() => setIsEditing(false)} className="w-full py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] hover:scale-105 transition-all">
+            <button
+              onClick={() => setIsEditing(false)}
+              className="w-full py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] hover:scale-105 transition-all"
+            >
               Cancel
             </button>
           </div>
         )}
       </div>
 
+      {/* AVATAR MODAL */}
+      <AvatarModal
+        isOpen={showAvatarModal}
+        onClose={() => setShowAvatarModal(false)}
+        currentAvatar={user?.avatarUrl || user?.avatar_url}
+        onSave={handleAvatarSave}
+      />
+
       {/* EMAIL MODAL */}
-      <Modal isOpen={showEmailModal} onClose={() => setShowEmailModal(false)}>
+      <Modal
+        isOpen={showEmailModal}
+        onClose={() => setShowEmailModal(false)}
+      >
         {!emailVerifySent ? (
           <>
-            <h2 style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3" }} className="text-2xl mb-2">Change Email</h2>
-            <p className="text-[#7A6C9D] text-sm mb-5">Enter your new email. We'll send a verification link to it before making the change.</p>
+            <h2
+              style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3" }}
+              className="text-2xl mb-2"
+            >
+              Change Email
+            </h2>
+            <p className="text-[#7A6C9D] text-sm mb-5">
+              Enter your new email. We'll send a verification link to it before
+              making the change.
+            </p>
             <input
               type="email"
               placeholder="New email address"
               value={newEmailInput}
-              onChange={(e) => { setNewEmailInput(e.target.value); setEmailChangeError(""); }}
+              onChange={(e) => {
+                setNewEmailInput(e.target.value);
+                setEmailChangeError("");
+              }}
               className={inputStyle + " text-left mb-3"}
             />
-            {emailChangeError && <p className="text-red-500 text-sm mb-3">{emailChangeError}</p>}
+            {emailChangeError && (
+              <p className="text-red-500 text-sm mb-3">{emailChangeError}</p>
+            )}
             <div className="flex gap-3">
-              <button onClick={() => setShowEmailModal(false)} className="flex-1 py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A]">Cancel</button>
-              <button onClick={handleEmailChangeRequest} className="flex-1 py-3 rounded-full bg-[#FF8FA3] text-white">Send Link</button>
+              <button
+                onClick={() => setShowEmailModal(false)}
+                className="flex-1 py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleEmailChangeRequest}
+                className="flex-1 py-3 rounded-full bg-[#FF8FA3] text-white"
+              >
+                Send Link
+              </button>
             </div>
           </>
         ) : (
           <>
             <div className="text-5xl mb-4">📧</div>
-            <h2 style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3" }} className="text-2xl mb-3">Check Your Email</h2>
-            <p className="text-[#7A6C9D] text-sm mb-5">A verification link has been sent to <strong>{newEmailInput}</strong>.</p>
-            <button onClick={() => { setShowEmailModal(false); setEmailVerifySent(false); }} className="w-full py-3 rounded-full bg-[#FF8FA3] text-white">Done</button>
+            <h2
+              style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3" }}
+              className="text-2xl mb-3"
+            >
+              Check Your Email
+            </h2>
+            <p className="text-[#7A6C9D] text-sm mb-5">
+              A verification link has been sent to{" "}
+              <strong>{newEmailInput}</strong>.
+            </p>
+            <button
+              onClick={() => {
+                setShowEmailModal(false);
+                setEmailVerifySent(false);
+              }}
+              className="w-full py-3 rounded-full bg-[#FF8FA3] text-white"
+            >
+              Done
+            </button>
           </>
         )}
       </Modal>
 
       {/* PASSWORD MODAL */}
-      <Modal isOpen={showPasswordModal} onClose={() => { setShowPasswordModal(false); setPasswordError(""); }}>
-        <h2 style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3" }} className="text-2xl mb-6">Change Password</h2>
+      <Modal
+        isOpen={showPasswordModal}
+        onClose={() => {
+          setShowPasswordModal(false);
+          setPasswordError("");
+        }}
+      >
+        <h2
+          style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3" }}
+          className="text-2xl mb-6"
+        >
+          Change Password
+        </h2>
         <div className="space-y-4 text-left">
-          <input placeholder="New Password" type="password" value={passwordForm.newPassword} onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })} className={inputStyle} />
-          <input placeholder="Confirm New Password" type="password" value={passwordForm.confirmPassword} onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })} className={inputStyle} />
-          {passwordError && <p className="text-red-500 text-sm">{passwordError}</p>}
-          <p className="text-[#C8B6E2] text-xs">Must have 1 capital letter, 1 symbol, and 2 numbers.</p>
+          <input
+            placeholder="New Password"
+            type="password"
+            value={passwordForm.newPassword}
+            onChange={(e) =>
+              setPasswordForm({ ...passwordForm, newPassword: e.target.value })
+            }
+            className={inputStyle}
+          />
+          <input
+            placeholder="Confirm New Password"
+            type="password"
+            value={passwordForm.confirmPassword}
+            onChange={(e) =>
+              setPasswordForm({
+                ...passwordForm,
+                confirmPassword: e.target.value,
+              })
+            }
+            className={inputStyle}
+          />
+          {passwordError && (
+            <p className="text-red-500 text-sm">{passwordError}</p>
+          )}
+          <p className="text-[#C8B6E2] text-xs">
+            Must have 1 capital letter, 1 symbol, and 2 numbers.
+          </p>
         </div>
         <div className="flex gap-3 mt-6">
-          <button onClick={() => { setShowPasswordModal(false); setPasswordError(""); }} className="flex-1 py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A]">Cancel</button>
-          <button onClick={handlePasswordChange} className="flex-1 py-3 rounded-full bg-[#FF8FA3] text-white">Confirm</button>
+          <button
+            onClick={() => {
+              setShowPasswordModal(false);
+              setPasswordError("");
+            }}
+            className="flex-1 py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A]"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handlePasswordChange}
+            className="flex-1 py-3 rounded-full bg-[#FF8FA3] text-white"
+          >
+            Confirm
+          </button>
         </div>
       </Modal>
 
       {/* ROLE CHANGE CONFIRM MODAL */}
-      <Modal isOpen={showConfirmModal} onClose={() => { setShowConfirmModal(false); setPendingUpdate(null); }}>
-        <h2 style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3" }} className="text-2xl mb-4">Change Account Type?</h2>
-        <p className="text-[#2E2A4A] mb-4 leading-relaxed">Switch to <span className="text-[#FF8FA3] font-medium capitalize">{pendingRole}</span>?</p>
+      <Modal
+        isOpen={showConfirmModal}
+        onClose={() => {
+          setShowConfirmModal(false);
+          setPendingUpdate(null);
+        }}
+      >
+        <h2
+          style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3" }}
+          className="text-2xl mb-4"
+        >
+          Change Account Type?
+        </h2>
+        <p className="text-[#2E2A4A] mb-4 leading-relaxed">
+          Switch to{" "}
+          <span className="text-[#FF8FA3] font-medium capitalize">
+            {pendingRole}
+          </span>
+          ?
+        </p>
         {switchingToBuyerConfirm && (
           <div className="rounded-[14px] bg-red-50 border border-red-200 p-4 mb-4 text-left">
             <p className="text-red-500 text-sm font-medium mb-1">⚠️ Warning</p>
-            <p className="text-red-400 text-sm leading-relaxed">Switching to Buyer will permanently delete all your uploaded products. This cannot be undone.</p>
+            <p className="text-red-400 text-sm leading-relaxed">
+              Switching to Buyer will permanently delete all your uploaded
+              products. This cannot be undone.
+            </p>
           </div>
         )}
         {onlySellerSwitchingToBuyer && (
           <div className="rounded-[14px] bg-[#EDE8F9] border border-[#C8B6E2] p-4 mb-4 text-left">
             <p className="text-[#4A3A7A] text-sm font-medium mb-1">💡 Tip</p>
-            <p className="text-[#7A6C9D] text-sm leading-relaxed">Consider switching to <span className="text-[#FF8FA3] font-medium">Both</span> instead.</p>
+            <p className="text-[#7A6C9D] text-sm leading-relaxed">
+              Consider switching to{" "}
+              <span className="text-[#FF8FA3] font-medium">Both</span> instead.
+            </p>
           </div>
         )}
         <div className="flex gap-3">
-          <button onClick={() => { setShowConfirmModal(false); setPendingUpdate(null); }} className="flex-1 py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A]">Cancel</button>
-          <button onClick={confirmRoleChange} className="flex-1 py-3 rounded-full bg-[#FF8FA3] text-white">Yes, Switch</button>
+          <button
+            onClick={() => {
+              setShowConfirmModal(false);
+              setPendingUpdate(null);
+            }}
+            className="flex-1 py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A]"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={confirmRoleChange}
+            className="flex-1 py-3 rounded-full bg-[#FF8FA3] text-white"
+          >
+            Yes, Switch
+          </button>
         </div>
       </Modal>
 
       {/* DELETE ACCOUNT MODAL */}
-      <Modal isOpen={showDeleteModal} onClose={() => !deleting && setShowDeleteModal(false)}>
+      <Modal
+        isOpen={showDeleteModal}
+        onClose={() => !deleting && setShowDeleteModal(false)}
+      >
         <div className="text-5xl mb-4">🗑️</div>
-        <h2 style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3" }} className="text-2xl mb-4">Delete Account?</h2>
+        <h2
+          style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3" }}
+          className="text-2xl mb-4"
+        >
+          Delete Account?
+        </h2>
         <p className="text-[#2E2A4A] mb-4 leading-relaxed">
-          This will permanently delete your account, all your products, and all your deals.
-          This action <span className="font-semibold text-red-500">cannot be undone</span>.
+          This will permanently delete your account, all your products, and all
+          your deals. This action{" "}
+          <span className="font-semibold text-red-500">cannot be undone</span>.
         </p>
-        {deleting && <p className="text-[#7A6C9D] text-sm mb-4">Deleting your account...</p>}
+        {deleting && (
+          <p className="text-[#7A6C9D] text-sm mb-4">
+            Deleting your account...
+          </p>
+        )}
         <div className="flex gap-3">
-          <button onClick={() => setShowDeleteModal(false)} disabled={deleting} className="flex-1 py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] disabled:opacity-50">Cancel</button>
-          <button onClick={handleDeleteAccount} disabled={deleting} className="flex-1 py-3 rounded-full bg-red-400 text-white disabled:opacity-50">
+          <button
+            onClick={() => setShowDeleteModal(false)}
+            disabled={deleting}
+            className="flex-1 py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleDeleteAccount}
+            disabled={deleting}
+            className="flex-1 py-3 rounded-full bg-red-400 text-white disabled:opacity-50"
+          >
             {deleting ? "Deleting..." : "Delete"}
           </button>
         </div>
