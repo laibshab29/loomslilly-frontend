@@ -207,7 +207,10 @@ export function OrderProvider({ children }) {
       .select()
       .single();
 
-    if (orderError) { console.error("placeOrder insert error:", orderError.message); return null; }
+    if (orderError) { 
+  console.error("placeOrder insert error:", orderError.message, orderError.code, orderError.details, orderError.hint); 
+  return null; 
+}
 
     // ── INSERT order_items ──
     const itemRows = cartItems.map((item) => ({

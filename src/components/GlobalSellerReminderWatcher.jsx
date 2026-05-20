@@ -4,11 +4,11 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useOrders } from "../context/OrderContext";
 
-const PERSISTENT_THRESHOLD_MS = 2 * 60 * 1000;
-
+// Tracks which order numbers the seller has already been alerted about
+// this session, so the modal doesn't keep re-opening.
 function getDismissedSet(userId) {
   try {
-    const raw = sessionStorage.getItem("dismissedReminders_" + userId);
+    const raw = sessionStorage.getItem("alertedOrders_" + userId);
     return new Set(raw ? JSON.parse(raw) : []);
   } catch {
     return new Set();
@@ -17,105 +17,67 @@ function getDismissedSet(userId) {
 
 function saveDismissedSet(userId, set) {
   try {
-    sessionStorage.setItem("dismissedReminders_" + userId, JSON.stringify([...set]));
+    sessionStorage.setItem("alertedOrders_" + userId, JSON.stringify([...set]));
   } catch {}
 }
 
 export function GlobalSellerReminderWatcher() {
   const { user, role } = useAuth();
-  const { orders, sendPaymentReminder, declineReminder } = useOrders();
+  const { orders } = useOrders();
   const navigate = useNavigate();
 
-  const [activeReminder, setActiveReminder] = useState(null);
-  const [, forceTick] = useState({});
+  const [activeAlert, setActiveAlert] = useState(null);
 
   const isSeller = role === "seller" || role === "both";
 
-  // Poll for stale orders every 10s
+  // Watch for new wallet payment orders that need review
   useEffect(() => {
     if (!isSeller || !user) return;
 
-    const checkForStaleOrders = () => {
-      const dismissed = getDismissedSet(user.id);
-      const now = Date.now();
+    const dismissed = getDismissedSet(user.id);
 
-      const stale = orders.find((o) => {
-        if (o.status !== "waiting_confirmation") return false;
-        if (!o.items.some((i) => i.sellerId === user.id)) return false;
-        if (now - o.createdAt < PERSISTENT_THRESHOLD_MS) return false;
-        if (o.reminderSent || o.reminderDeclinedAt) return false;
-        if (dismissed.has(o.orderNumber)) return false;
-        return true;
-      });
+    const pending = orders.find((o) => {
+      if (o.status !== "waiting_confirmation") return false;
+      if (!o.items.some((i) => String(i.sellerId) === String(user.id))) return false;
+      if (dismissed.has(o.orderNumber)) return false;
+      const isWallet =
+        o.paymentMethod === "JazzCash" || o.paymentMethod === "EasyPaisa";
+      return isWallet;
+    });
 
-      if (stale && !activeReminder) {
-        setActiveReminder(stale);
-      }
-    };
-
-    checkForStaleOrders();
-    const interval = setInterval(() => {
-      checkForStaleOrders();
-      forceTick({});
-    }, 10000);
-
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orders, user, isSeller, activeReminder]);
-
-  // BUG FIX 2: auto-close the modal if the order it's showing has progressed
-  // past waiting_confirmation (cancelled, confirmed, etc). Without this, a
-  // stale modal can sit on screen for an order that's already resolved, and
-  // the seller might click an action that mutates a resolved order.
-  useEffect(() => {
-    if (!activeReminder) return;
-    const current = orders.find((o) => o.orderNumber === activeReminder.orderNumber);
-    if (!current || current.status !== "waiting_confirmation") {
-      setActiveReminder(null);
+    if (pending && !activeAlert) {
+      setActiveAlert(pending);
     }
-  }, [orders, activeReminder]);
+  }, [orders, user, isSeller, activeAlert]);
 
-  if (!activeReminder) return null;
+  // Auto-close if the order is no longer waiting
+  useEffect(() => {
+    if (!activeAlert) return;
+    const current = orders.find((o) => o.orderNumber === activeAlert.orderNumber);
+    if (!current || current.status !== "waiting_confirmation") {
+      setActiveAlert(null);
+    }
+  }, [orders, activeAlert]);
 
-  const myItems = activeReminder.items.filter((i) => i.sellerId === user.id);
-  const myTotal = myItems.reduce((sum, i) => sum + i.price * i.quantity, 0);
-
-  // BUG FIX 3: mark dismissed BEFORE calling sendPaymentReminder so the next
-  // tick (which may run before the DB update propagates to local state)
-  // cannot re-open the modal for the same order. This was the root cause of
-  // payment_failure notifications stacking 4+ times on the buyer's side.
-  const handleSendReminder = () => {
+  const dismiss = () => {
+    if (!activeAlert || !user) return;
     const dismissed = getDismissedSet(user.id);
-    dismissed.add(activeReminder.orderNumber);
+    dismissed.add(activeAlert.orderNumber);
     saveDismissedSet(user.id, dismissed);
-
-    sendPaymentReminder(activeReminder.orderNumber);
-    setActiveReminder(null);
-  };
-
-  const handleDeclineReminder = () => {
-    const dismissed = getDismissedSet(user.id);
-    dismissed.add(activeReminder.orderNumber);
-    saveDismissedSet(user.id, dismissed);
-
-    declineReminder(activeReminder.orderNumber);
-    setActiveReminder(null);
-  };
-
-  const handleSnooze = () => {
-    const dismissed = getDismissedSet(user.id);
-    dismissed.add(activeReminder.orderNumber);
-    saveDismissedSet(user.id, dismissed);
-    setActiveReminder(null);
+    setActiveAlert(null);
   };
 
   const handleGoToSales = () => {
-    const dismissed = getDismissedSet(user.id);
-    dismissed.add(activeReminder.orderNumber);
-    saveDismissedSet(user.id, dismissed);
-    setActiveReminder(null);
+    dismiss();
     navigate("/my-sales");
   };
+
+  if (!activeAlert) return null;
+
+  const myItems = activeAlert.items.filter(
+    (i) => String(i.sellerId) === String(user.id)
+  );
+  const myTotal = myItems.reduce((sum, i) => sum + i.price * i.quantity, 0);
 
   return (
     <AnimatePresence>
@@ -124,6 +86,7 @@ export function GlobalSellerReminderWatcher() {
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         className="fixed inset-0 z-[400] flex items-center justify-center px-4 bg-black/50 backdrop-blur-md"
+        onClick={(e) => { if (e.target === e.currentTarget) dismiss(); }}
       >
         <motion.div
           initial={{ y: -20, opacity: 0, scale: 0.95 }}
@@ -132,7 +95,7 @@ export function GlobalSellerReminderWatcher() {
           transition={{ type: "spring", stiffness: 300, damping: 28 }}
           className="w-full max-w-[480px] rounded-[24px] bg-[#FFF6F8] p-10 shadow-2xl border-2 border-amber-300"
         >
-          <div className="text-5xl text-center mb-4">⏰</div>
+          <div className="text-5xl text-center mb-4">🧾</div>
 
           <h2
             style={{
@@ -142,54 +105,45 @@ export function GlobalSellerReminderWatcher() {
             }}
             className="text-3xl mb-4 text-center"
           >
-            Unconfirmed Payment
+            New Payment to Review
           </h2>
 
           <p className="text-[#2E2A4A] mb-3 leading-relaxed text-center">
-            Order <strong>{activeReminder.orderNumber}</strong> from{" "}
-            <strong>{activeReminder.buyerName}</strong> hasn't been confirmed yet.
+            Order <strong>{activeAlert.orderNumber}</strong> from{" "}
+            <strong>{activeAlert.buyerName || "a buyer"}</strong> is waiting
+            for your payment approval.
           </p>
 
           <div className="rounded-[12px] bg-[#EDE8F9] p-3 mb-4 text-center">
-            <p className="text-xs text-[#7A6C9D] uppercase tracking-wide mb-1">Your portion</p>
-            <p className="text-[#FF8FA3] font-bold text-xl">Rs. {myTotal.toFixed(2)}</p>
-            <p className="text-xs text-[#7A6C9D] mt-1">via {activeReminder.paymentMethod}</p>
+            <p className="text-xs text-[#7A6C9D] uppercase tracking-wide mb-1">
+              Your portion
+            </p>
+            <p className="text-[#FF8FA3] font-bold text-xl">
+              Rs. {myTotal.toFixed(2)}
+            </p>
+            <p className="text-xs text-[#7A6C9D] mt-1">
+              via {activeAlert.paymentMethod}
+            </p>
           </div>
 
           <p className="text-[#7A6C9D] text-sm mb-6 text-center leading-relaxed">
-            Send the buyer a reminder so they can retry payment? If you decline, the order will auto-cancel in 1 minute.
+            The buyer has uploaded a payment screenshot. Go to My Sales to
+            review it and approve or reject.
           </p>
 
-          <div className="space-y-2">
-            <div className="flex gap-3">
-              <button
-                onClick={handleDeclineReminder}
-                className="flex-1 py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] hover:scale-105 transition-all"
-              >
-                No, don't send
-              </button>
-              <button
-                onClick={handleSendReminder}
-                className="flex-1 py-3 rounded-full bg-[#FF8FA3] text-white hover:scale-105 transition-all"
-              >
-                Yes, send reminder
-              </button>
-            </div>
-
-            <div className="flex gap-3">
-              <button
-                onClick={handleSnooze}
-                className="flex-1 py-2 rounded-full bg-transparent border border-[#C8B6E2] text-[#7A6C9D] text-sm hover:bg-[#C8B6E2]/20 transition-all"
-              >
-                Remind me later
-              </button>
-              <button
-                onClick={handleGoToSales}
-                className="flex-1 py-2 rounded-full bg-transparent border border-[#C8B6E2] text-[#7A6C9D] text-sm hover:bg-[#C8B6E2]/20 transition-all"
-              >
-                Go to My Sales
-              </button>
-            </div>
+          <div className="flex gap-3">
+            <button
+              onClick={dismiss}
+              className="flex-1 py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A] hover:scale-105 transition-all"
+            >
+              Later
+            </button>
+            <button
+              onClick={handleGoToSales}
+              className="flex-1 py-3 rounded-full bg-[#FF8FA3] text-white hover:scale-105 transition-all"
+            >
+              Review Now →
+            </button>
           </div>
         </motion.div>
       </motion.div>

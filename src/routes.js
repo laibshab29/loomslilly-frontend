@@ -45,6 +45,7 @@ import { Wishlist } from "./pages/Wishlist";
 import { MyActivity } from "./pages/MyActivity";
 import { Admin } from "./pages/Admin";
 import { AdminLogin } from "./pages/AdminLogin";
+import { Checkout } from "./pages/Checkout";
 
 export const router = createBrowserRouter([
   {
@@ -81,6 +82,7 @@ export const router = createBrowserRouter([
       { path: "new-arrivals", element: <NewArrivals /> },
       { path: "trending", element: <Trending /> },
       { path: "cart", element: <Cart /> },
+      { path: "checkout", element: <Checkout /> },
       { path: "signup", element: <SignUp /> },
       { path: "account", element: <Account /> },
       { path: "notifications", element: <Notifications /> },
