@@ -6,8 +6,6 @@ import { useOrders } from "../context/OrderContext";
 
 const PERSISTENT_THRESHOLD_MS = 2 * 60 * 1000;
 
-// Tracks which orders the seller has already dismissed this session
-// (prevents the popup from re-appearing on every tick after they snooze it)
 function getDismissedSet(userId) {
   try {
     const raw = sessionStorage.getItem("dismissedReminders_" + userId);
@@ -41,8 +39,6 @@ export function GlobalSellerReminderWatcher() {
       const dismissed = getDismissedSet(user.id);
       const now = Date.now();
 
-      // Find orders waiting confirmation, 2+ minutes old, for this seller,
-      // not currently shown, not dismissed this session
       const stale = orders.find((o) => {
         if (o.status !== "waiting_confirmation") return false;
         if (!o.items.some((i) => i.sellerId === user.id)) return false;
@@ -60,30 +56,53 @@ export function GlobalSellerReminderWatcher() {
     checkForStaleOrders();
     const interval = setInterval(() => {
       checkForStaleOrders();
-      forceTick({}); // refresh in case orders array hasn't changed but time has
+      forceTick({});
     }, 10000);
 
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orders, user, isSeller, activeReminder]);
 
+  // BUG FIX 2: auto-close the modal if the order it's showing has progressed
+  // past waiting_confirmation (cancelled, confirmed, etc). Without this, a
+  // stale modal can sit on screen for an order that's already resolved, and
+  // the seller might click an action that mutates a resolved order.
+  useEffect(() => {
+    if (!activeReminder) return;
+    const current = orders.find((o) => o.orderNumber === activeReminder.orderNumber);
+    if (!current || current.status !== "waiting_confirmation") {
+      setActiveReminder(null);
+    }
+  }, [orders, activeReminder]);
+
   if (!activeReminder) return null;
 
   const myItems = activeReminder.items.filter((i) => i.sellerId === user.id);
   const myTotal = myItems.reduce((sum, i) => sum + i.price * i.quantity, 0);
 
+  // BUG FIX 3: mark dismissed BEFORE calling sendPaymentReminder so the next
+  // tick (which may run before the DB update propagates to local state)
+  // cannot re-open the modal for the same order. This was the root cause of
+  // payment_failure notifications stacking 4+ times on the buyer's side.
   const handleSendReminder = () => {
+    const dismissed = getDismissedSet(user.id);
+    dismissed.add(activeReminder.orderNumber);
+    saveDismissedSet(user.id, dismissed);
+
     sendPaymentReminder(activeReminder.orderNumber);
     setActiveReminder(null);
   };
 
   const handleDeclineReminder = () => {
+    const dismissed = getDismissedSet(user.id);
+    dismissed.add(activeReminder.orderNumber);
+    saveDismissedSet(user.id, dismissed);
+
     declineReminder(activeReminder.orderNumber);
     setActiveReminder(null);
   };
 
   const handleSnooze = () => {
-    // Mark as dismissed for this session so the popup doesn't reappear
     const dismissed = getDismissedSet(user.id);
     dismissed.add(activeReminder.orderNumber);
     saveDismissedSet(user.id, dismissed);

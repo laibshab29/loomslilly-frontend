@@ -1,9 +1,18 @@
 import { motion } from "framer-motion";
 import { useState } from "react";
-import { ShoppingBag, Store, Users, Eye, EyeOff, Mail, RefreshCw, Smartphone } from "lucide-react";
+import {
+  ShoppingBag,
+  Store,
+  Users,
+  Eye,
+  EyeOff,
+  Mail,
+  Smartphone,
+} from "lucide-react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
+// ─── PHONE HELPERS ────────────────────────────────────────────
 const sanitizePhone = (value) => {
   let result = "";
   for (let i = 0; i < value.length; i++) {
@@ -33,18 +42,18 @@ const validateContactEmail = (value) => {
   if (!value.includes("@")) return "Email must contain an @ symbol.";
   const [local, domain] = value.split("@");
   if (!local) return "Email is missing the part before @.";
-  if (!domain || !domain.includes(".")) return "Email must have a valid domain (e.g. gmail.com).";
+  if (!domain || !domain.includes("."))
+    return "Email must have a valid domain (e.g. gmail.com).";
   if (domain.startsWith(".") || domain.endsWith("."))
     return "Domain cannot start or end with a dot.";
   return "";
 };
 
-function generateVerificationCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
-}
+// ✅ Name is valid only if it contains letters (and spaces/hyphens for compound names)
+const hasInvalidNameChar = (value) => /[^a-zA-Z\s\-']/.test(value);
 
 export function SignUp() {
-  const { login, register, preRegister, validateEmail } = useAuth();
+  const { login, register, validateEmail } = useAuth();
   const navigate = useNavigate();
 
   const [searchParams] = useSearchParams();
@@ -52,6 +61,7 @@ export function SignUp() {
 
   const [accountType, setAccountType] = useState(null);
   const [showPassword, setShowPassword] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -65,12 +75,7 @@ export function SignUp() {
 
   const [errors, setErrors] = useState({});
   const [error, setError] = useState(null);
-
-  const [verificationStep, setVerificationStep] = useState(false);
-  const [verificationCode, setVerificationCode] = useState("");
-  const [enteredCode, setEnteredCode] = useState("");
-  const [verifyError, setVerifyError] = useState("");
-  const [resendCooldown, setResendCooldown] = useState(0);
+  const [emailSent, setEmailSent] = useState(false);
 
   const inputStyle =
     "w-full px-4 py-3 rounded-[16px] bg-[#F6C1CC]/20 border-2 border-[#7A6C9D]/20 outline-none focus:ring-0 text-[#2E2A4A] placeholder:text-[#7A6C9D]";
@@ -79,7 +84,9 @@ export function SignUp() {
 
   const validateField = (field, value) => {
     if (field === "name" && mode === "signup") {
-      return !value ? "Name is required" : "";
+      if (!value) return "Name is required";
+      if (hasInvalidNameChar(value)) return "Name can only contain letters, spaces, hyphens, and apostrophes";
+      return "";
     }
     if (field === "email") {
       if (!value) return "Email is required";
@@ -91,79 +98,39 @@ export function SignUp() {
       if (!value) return "Password is required";
       if (!/[A-Z]/.test(value)) return "Must include at least one capital letter";
       if (!/[^A-Za-z0-9]/.test(value)) return "Must include at least one symbol";
-      if ((value.match(/\d/g) || []).length < 2) return "Must include at least two numbers";
+      if ((value.match(/\d/g) || []).length < 2)
+        return "Must include at least two numbers";
       return "";
     }
     if (field === "phone") return validatePhone(value);
     if (field === "contactEmail") return validateContactEmail(value);
-    if (field === "jazzcashPhone" || field === "easypaisaPhone") return validatePhone(value);
+    if (field === "jazzcashPhone" || field === "easypaisaPhone")
+      return validatePhone(value);
     return "";
   };
 
   const handleChange = (field, value) => {
+    // ✅ Block digits AND symbols in name (only letters, spaces, hyphens, apostrophes allowed)
+    if (field === "name" && hasInvalidNameChar(value)) return;
+
     const phoneFields = ["phone", "jazzcashPhone", "easypaisaPhone"];
     const processed = phoneFields.includes(field) ? sanitizePhone(value) : value;
     setFormData((prev) => ({ ...prev, [field]: processed }));
     setErrors((prev) => ({ ...prev, [field]: validateField(field, processed) }));
   };
 
-  const startResendCooldown = () => {
-    setResendCooldown(30);
-    const interval = setInterval(() => {
-      setResendCooldown((prev) => {
-        if (prev <= 1) { clearInterval(interval); return 0; }
-        return prev - 1;
-      });
-    }, 1000);
-  };
-
-  const handleResendCode = () => {
-    if (resendCooldown > 0) return;
-    const newCode = generateVerificationCode();
-    setVerificationCode(newCode);
-    setEnteredCode("");
-    setVerifyError("");
-    startResendCooldown();
-  };
-
-  const handleVerifyCode = () => {
-    if (enteredCode.length !== 6) {
-      setVerifyError("Please enter the full 6-digit code.");
-      return;
-    }
-    if (enteredCode !== verificationCode) {
-      setVerifyError("Incorrect code. Please try again.");
-      return;
-    }
-
-    const result = register({
-      name: formData.name,
-      email: formData.email,
-      password: formData.password,
-      role: accountType,
-      phone: formData.phone,
-      contactEmail: formData.contactEmail,
-      jazzcashPhone: formData.jazzcashPhone,
-      easypaisaPhone: formData.easypaisaPhone,
-      emailVerified: true,
-    });
-
-    if (!result.success) {
-      setVerifyError(result.message);
-      return;
-    }
-
-    navigate("/");
-  };
-
-  const handleSubmit = (e) => {
+  // ─── SUBMIT ──────────────────────────────────────────────────
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
 
     const newErrors = {};
 
-    if (mode === "signup" && !formData.name)
-      newErrors.name = "Name is required";
+    if (mode === "signup") {
+      if (!formData.name) newErrors.name = "Name is required";
+      else if (hasInvalidNameChar(formData.name))
+        newErrors.name = "Name can only contain letters, spaces, hyphens, and apostrophes";
+    }
 
     if (!formData.email) newErrors.email = "Email is required";
     else if (!formData.email.includes("@")) newErrors.email = "Email must include '@'";
@@ -183,17 +150,14 @@ export function SignUp() {
     const contactEmailErr = validateContactEmail(formData.contactEmail);
     if (contactEmailErr) newErrors.contactEmail = contactEmailErr;
 
-    // Wallet validation for sellers/both
     if (mode === "signup" && isSellerType) {
       const jcErr = validatePhone(formData.jazzcashPhone);
       if (jcErr) newErrors.jazzcashPhone = jcErr;
-
       const epErr = validatePhone(formData.easypaisaPhone);
       if (epErr) newErrors.easypaisaPhone = epErr;
-
-      // Require AT LEAST ONE wallet for sellers
       if (!formData.jazzcashPhone && !formData.easypaisaPhone) {
-        newErrors.walletRequired = "Sellers must provide at least one wallet (JazzCash or EasyPaisa) so buyers can pay you.";
+        newErrors.walletRequired =
+          "Sellers must provide at least one wallet (JazzCash or EasyPaisa) so buyers can pay you.";
       }
     }
 
@@ -202,16 +166,25 @@ export function SignUp() {
       return;
     }
 
+    setSubmitting(true);
+
+    // ── LOGIN flow ──
     if (mode === "login") {
-      const result = login({ email: formData.email, password: formData.password });
+      const result = await login({ email: formData.email, password: formData.password });
+      setSubmitting(false);
       if (!result.success) { setError(result.message); return; }
       navigate("/");
       return;
     }
 
-    if (!accountType) { setError("Please select account type"); return; }
+    // ── SIGNUP flow ──
+    if (!accountType) {
+      setError("Please select account type");
+      setSubmitting(false);
+      return;
+    }
 
-    const check = preRegister({
+    const result = await register({
       name: formData.name,
       email: formData.email,
       password: formData.password,
@@ -222,19 +195,14 @@ export function SignUp() {
       easypaisaPhone: formData.easypaisaPhone,
     });
 
-    if (!check.success) {
-      setError(check.message);
-      return;
-    }
+    setSubmitting(false);
 
-    const code = generateVerificationCode();
-    setVerificationCode(code);
-    setVerificationStep(true);
-    startResendCooldown();
+    if (!result.success) { setError(result.message); return; }
+    setEmailSent(true);
   };
 
-  // ─── VERIFICATION STEP ─────────────────────────────────────
-  if (verificationStep) {
+  // ─── EMAIL SENT SCREEN ───────────────────────────────────────
+  if (emailSent) {
     return (
       <div className="min-h-screen py-12 px-4 lg:px-20">
         <div className="max-w-[600px] mx-auto">
@@ -251,71 +219,36 @@ export function SignUp() {
               style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3", textShadow: "0 0 30px rgba(255,143,163,0.6)" }}
               className="text-4xl mb-3"
             >
-              Verify Your Email
+              Check Your Email
             </h1>
 
-            <p className="text-[#7A6C9D] mb-2">
-              We've sent a 6-digit verification code to
-            </p>
+            <p className="text-[#7A6C9D] mb-2">We've sent a verification link to</p>
             <p className="text-[#2E2A4A] font-medium mb-6">{formData.email}</p>
 
-            <div className="rounded-[16px] bg-[#EDE8F9] border-2 border-dashed border-[#C8B6E2] p-4 mb-6">
-              <p className="text-[#7A6C9D] text-xs mb-2">
-                🚧 Demo Mode — your code (will be sent via email once backend is connected):
-              </p>
-              <p
-                className="text-3xl tracking-[0.5em] text-[#4A3A7A] font-bold"
-                style={{ fontFamily: "monospace" }}
-              >
-                {verificationCode}
-              </p>
+            <div className="rounded-[16px] bg-[#EDE8F9] border-2 border-[#C8B6E2]/40 p-5 mb-8 text-left space-y-2">
+              <p className="text-[#7A6C9D] text-sm font-medium">What to do next:</p>
+              <p className="text-[#2E2A4A] text-sm">1. Open the email from LoomsLilly.</p>
+              <p className="text-[#2E2A4A] text-sm">2. Click the verification link inside.</p>
+              <p className="text-[#2E2A4A] text-sm">3. Come back here and log in.</p>
             </div>
 
-            <div className="mb-4">
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={6}
-                placeholder="• • • • • •"
-                value={enteredCode}
-                onChange={(e) => {
-                  const digits = e.target.value.replace(/\D/g, "").slice(0, 6);
-                  setEnteredCode(digits);
-                  if (verifyError) setVerifyError("");
-                }}
-                className="w-full px-4 py-4 rounded-[16px] bg-[#F6C1CC]/20 border-2 border-[#7A6C9D]/20 outline-none focus:border-[#FF8FA3] text-[#2E2A4A] text-2xl text-center tracking-[0.5em] font-bold"
-                style={{ fontFamily: "monospace" }}
-              />
-              {verifyError && <p className="text-red-500 text-sm mt-2">{verifyError}</p>}
-            </div>
+            <p className="text-[#C8B6E2] text-xs mb-6">
+              Didn't receive it? Check your spam folder. The link expires in 24 hours.
+            </p>
 
             <button
-              onClick={handleVerifyCode}
-              className="w-full py-4 rounded-full bg-[#FF8FA3] text-white hover:scale-[1.02] transition-all shadow-md mb-4"
+              onClick={() => navigate("/signup?mode=login")}
+              className="w-full py-4 rounded-full bg-[#FF8FA3] text-white hover:scale-[1.02] transition-all shadow-md"
             >
-              Verify & Create Account
+              Go to Login
             </button>
-
-            <div className="flex items-center justify-center gap-2 text-sm text-[#7A6C9D]">
-              <span>Didn't get the code?</span>
-              <button
-                onClick={handleResendCode}
-                disabled={resendCooldown > 0}
-                className={"flex items-center gap-1 font-medium transition-colors " + (resendCooldown > 0 ? "text-[#C8B6E2] cursor-not-allowed" : "text-[#FF8FA3] hover:underline")}
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : "Resend code"}
-              </button>
-            </div>
 
             <button
               onClick={() => {
-                setVerificationStep(false);
-                setVerificationCode("");
-                setEnteredCode("");
-                setVerifyError("");
+                setEmailSent(false);
+                setFormData({ name: "", email: "", password: "", phone: "", contactEmail: "", jazzcashPhone: "", easypaisaPhone: "" });
               }}
-              className="mt-6 text-[#C8B6E2] text-sm hover:text-[#FF8FA3] transition-colors"
+              className="mt-4 text-[#C8B6E2] text-sm hover:text-[#FF8FA3] transition-colors"
             >
               ← Back to sign up
             </button>
@@ -325,6 +258,7 @@ export function SignUp() {
     );
   }
 
+  // ─── MAIN SIGNUP / LOGIN FORM ────────────────────────────────
   return (
     <div className="min-h-screen py-12 px-4 lg:px-20">
       <div className="max-w-[800px] mx-auto">
@@ -349,9 +283,9 @@ export function SignUp() {
             <h2 className="text-3xl text-center text-[#FFF6F8] mb-8">I want to...</h2>
             <div className="grid md:grid-cols-3 gap-6">
               {[
-                { type: "buyer", icon: ShoppingBag, label: "Buy", description: "Shop for creative supplies" },
-                { type: "seller", icon: Store, label: "Sell", description: "Share your handmade creations" },
-                { type: "both", icon: Users, label: "Both", description: "Buy and sell in the community" },
+                { type: "buyer",  icon: ShoppingBag, label: "Buy",  description: "Shop for creative supplies" },
+                { type: "seller", icon: Store,        label: "Sell", description: "Share your handmade creations" },
+                { type: "both",   icon: Users,        label: "Both", description: "Buy and sell in the community" },
               ].map((option, index) => (
                 <motion.button
                   key={option.type}
@@ -385,9 +319,10 @@ export function SignUp() {
                     placeholder="Full Name *"
                     value={formData.name}
                     onChange={(e) => handleChange("name", e.target.value)}
-                    className={inputStyle}
+                    className={inputStyle + (errors.name ? " border-red-400" : "")}
                   />
                   {errors.name && <p className="text-red-500 text-sm mt-1">{errors.name}</p>}
+                  <p className="text-[#C8B6E2] text-xs mt-1">Letters, spaces, hyphens and apostrophes only</p>
                 </div>
               )}
 
@@ -396,7 +331,7 @@ export function SignUp() {
                   placeholder="Email *"
                   value={formData.email}
                   onChange={(e) => handleChange("email", e.target.value)}
-                  className={inputStyle}
+                  className={inputStyle + (errors.email ? " border-red-400" : "")}
                 />
                 {errors.email && <p className="text-red-500 text-sm mt-1">{errors.email}</p>}
               </div>
@@ -407,7 +342,7 @@ export function SignUp() {
                   placeholder="Password *"
                   value={formData.password}
                   onChange={(e) => handleChange("password", e.target.value)}
-                  className={`${inputStyle} pr-12`}
+                  className={`${inputStyle} pr-12` + (errors.password ? " border-red-400" : "")}
                 />
                 <button
                   type="button"
@@ -446,9 +381,7 @@ export function SignUp() {
                       onChange={(e) => handleChange("contactEmail", e.target.value)}
                       className={inputStyle + (errors.contactEmail ? " border-red-400" : "")}
                     />
-                    {errors.contactEmail && (
-                      <p className="text-red-500 text-xs mt-1">{errors.contactEmail}</p>
-                    )}
+                    {errors.contactEmail && <p className="text-red-500 text-xs mt-1">{errors.contactEmail}</p>}
                   </div>
                 </div>
               )}
@@ -481,9 +414,7 @@ export function SignUp() {
                       onChange={(e) => handleChange("jazzcashPhone", e.target.value)}
                       className={inputStyle + (errors.jazzcashPhone ? " border-red-400" : "")}
                     />
-                    {errors.jazzcashPhone && (
-                      <p className="text-red-500 text-xs mt-1">{errors.jazzcashPhone}</p>
-                    )}
+                    {errors.jazzcashPhone && <p className="text-red-500 text-xs mt-1">{errors.jazzcashPhone}</p>}
                   </div>
 
                   <div>
@@ -494,19 +425,35 @@ export function SignUp() {
                       onChange={(e) => handleChange("easypaisaPhone", e.target.value)}
                       className={inputStyle + (errors.easypaisaPhone ? " border-red-400" : "")}
                     />
-                    {errors.easypaisaPhone && (
-                      <p className="text-red-500 text-xs mt-1">{errors.easypaisaPhone}</p>
-                    )}
+                    {errors.easypaisaPhone && <p className="text-red-500 text-xs mt-1">{errors.easypaisaPhone}</p>}
                   </div>
                 </div>
               )}
 
-              <button className="w-full py-4 rounded-full bg-[#FF8FA3] text-white">
-                {mode === "login" ? "Log In" : "Create Account"}
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full py-4 rounded-full bg-[#FF8FA3] text-white hover:scale-[1.02] transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {submitting
+                  ? mode === "login" ? "Logging in..." : "Creating account..."
+                  : mode === "login" ? "Log In" : "Create Account"}
               </button>
             </form>
           </div>
         )}
+
+        <p className="text-center text-[#FFF6F8]/70 mt-6 text-sm">
+          {mode === "login" ? (
+            <>Don't have an account?{" "}
+              <button onClick={() => navigate("/signup")} className="text-[#FF8FA3] hover:underline">Sign up</button>
+            </>
+          ) : (
+            <>Already have an account?{" "}
+              <button onClick={() => navigate("/signup?mode=login")} className="text-[#FF8FA3] hover:underline">Log in</button>
+            </>
+          )}
+        </p>
       </div>
     </div>
   );

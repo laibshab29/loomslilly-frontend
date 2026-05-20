@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Heart, ChevronLeft, ChevronRight, X, ShoppingCart, Truck, Tag, Package, ArrowLeft } from "lucide-react";
+import { Heart, ChevronLeft, ChevronRight, X, ShoppingCart, Tag, Package, ArrowLeft, User } from "lucide-react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { useProducts } from "../context/ProductContext";
 import { useCart } from "../context/CartContext";
 import { useAuth } from "../context/AuthContext";
+import { supabase } from "../lib/supabase";
 
 // ─── PORTAL WRAPPER ───────────────────────────────────────────
 function PortalModal({ children }) {
@@ -156,6 +157,21 @@ export function ProductDetails() {
 
   const product = products.find((p) => p.id === Number(id));
 
+  // ─── FETCH SELLER NAME DIRECTLY ──────────────────────────────
+  const [sellerName, setSellerName] = useState(null);
+
+  useEffect(() => {
+    if (!product?.sellerId) return;
+    supabase
+      .from("profiles")
+      .select("name")
+      .eq("id", product.sellerId)
+      .single()
+      .then(({ data }) => {
+        if (data?.name) setSellerName(data.name);
+      });
+  }, [product?.sellerId]);
+
   const [slideIndex, setSlideIndex] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxStart, setLightboxStart] = useState(0);
@@ -192,12 +208,6 @@ export function ProductDetails() {
     if (isSellerOnly || isOwnProduct) return;
     if (isOutOfStock) { setOutOfStockModal(true); return; }
 
-    // ✅ Block when cart quantity already equals or exceeds available stock
-    if (cartQty >= product.stock) {
-      // Trigger via addToCart so CartContext sets stockError,
-      // which StockExceededModal below listens to.
-    }
-
     const p = {
       id: product.id,
       name: product.name,
@@ -216,8 +226,6 @@ export function ProductDetails() {
     <>
       {lightboxOpen && <Lightbox images={allImages} startIndex={lightboxStart} onClose={() => setLightboxOpen(false)} />}
       {outOfStockModal && <OutOfStockModal onClose={() => setOutOfStockModal(false)} />}
-
-      {/* ✅ Portaled — renders at document.body level, backdrop-blur always visible */}
       <StockExceededModal message={stockError} onClose={clearStockError} />
 
       <div className="min-h-screen py-12 px-4 lg:px-20">
@@ -236,7 +244,6 @@ export function ProductDetails() {
 
             {/* ── LEFT: IMAGES ── */}
             <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}>
-              {/* MAIN IMAGE */}
               <div
                 className="rounded-[24px] overflow-hidden bg-gradient-to-br from-[#F6C1CC]/30 to-[#C8B6E2]/30 flex items-center justify-center cursor-zoom-in border-2 border-[#7A6C9D]/20 shadow-xl mb-4"
                 style={{ height: "400px" }}
@@ -253,7 +260,6 @@ export function ProductDetails() {
                 )}
               </div>
 
-              {/* THUMBNAILS */}
               {allImages.length > 1 && (
                 <div className="flex gap-3 flex-wrap">
                   {allImages.map((img, i) => (
@@ -300,6 +306,19 @@ export function ProductDetails() {
                   <Heart className={`w-6 h-6 ${isSaved ? "fill-[#FF8FA3] text-[#FF8FA3]" : "text-[#C8B6E2]"}`} />
                 </button>
               </div>
+
+              {/* ─── SELLER NAME + LINK ──────────────────────── */}
+              {product.sellerId && (
+                <Link
+                  to={`/seller/${product.sellerId}`}
+                  className="flex items-center gap-2 self-start px-3 py-1.5 rounded-full bg-[#FFF6F8]/10 border border-[#FFF6F8]/20 hover:bg-[#FF8FA3]/20 transition-colors"
+                >
+                  <User className="w-4 h-4 text-[#FF8FA3]" />
+                  <span className="text-[#FFF6F8] text-sm">
+                    {sellerName ? sellerName : "View Seller"}
+                  </span>
+                </Link>
+              )}
 
               {/* BADGE */}
               {product.badge && (

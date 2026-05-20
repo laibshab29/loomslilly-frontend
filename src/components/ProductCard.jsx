@@ -78,7 +78,7 @@ export function ProductCard({
   const { addToCart, removeFromCart, updateQuantity, cart, stockError, clearStockError } = useCart();
   const { user, role } = useAuth();
   const { toggleLike, isLikedByUser, getDealsForProduct } = useProducts();
-  const { getSellerById } = useSellers();
+  const { getSellerByIdSync } = useSellers();
   const navigate = useNavigate();
 
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -90,8 +90,17 @@ export function ProductCard({
   const allImages = images?.length > 0 ? images : image ? [image] : [];
   const isOutOfStock = stock <= 0;
   const isLowStock = stock > 0 && stock < 20;
-  const isOwnProduct = sellerId && user?.id === sellerId;
+
+  // FIX: coerce both sides to string — sellerId from Supabase is a UUID
+  // string but can arrive as a number through some paths. String() both.
+  const isOwnProduct =
+    sellerId != null && user?.id != null &&
+    String(user.id) === String(sellerId);
+
+  // FIX: only pure "seller" role is blocked from buying.
+  // "both" role users are buyers too and must be able to add to cart.
   const isSellerOnly = role === "seller";
+
   const isSaved = isLikedByUser(id, user?.id);
 
   const cartItem = cart?.find((item) => item.id === id);
@@ -100,8 +109,7 @@ export function ProductCard({
   const productDeals = getDealsForProduct ? getDealsForProduct(id) : [];
   const firstDeal = productDeals[0] || null;
 
-  // ─── SELLER INFO ──────────────────────────────────────────────
-  const seller = sellerId ? getSellerById(sellerId) : null;
+  const seller = sellerId ? getSellerByIdSync(sellerId) : null;
   const sellerName = seller?.name || null;
 
   const handleAddToCart = (e) => {
@@ -127,7 +135,6 @@ export function ProductCard({
 
   const handleCardClick = () => navigate("/products/" + id);
 
-  // ─── NOTIFICATIONS ────────────────────────────────────────────
   const notifications = useToast ? (
     <>
       <Toast isOpen={outOfStockNotice} onClose={() => setOutOfStockNotice(false)} title="Out of Stock" message="Sorry, this product is currently out of stock." variant="warning" />

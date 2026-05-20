@@ -19,15 +19,13 @@ function formatTimestamp(ts) {
 }
 
 export function MySales() {
-  const { getSalesForSeller, confirmPayment, sendPaymentReminder, declineReminder } = useOrders();
+  const { orders, confirmPayment, sendPaymentReminder, declineReminder } = useOrders();
   const { user, role } = useAuth();
 
   const [, forceUpdate] = useState({});
   const [copiedKey, setCopiedKey] = useState("");
-
-  // Confirmation modals
-  const [confirmingPayment, setConfirmingPayment] = useState(null); // order
-  const [reminderModal, setReminderModal] = useState(null);          // order
+  const [confirmingPayment, setConfirmingPayment] = useState(null);
+  const [reminderModal, setReminderModal] = useState(null);
 
   useEffect(() => {
     const interval = setInterval(() => forceUpdate({}), 10000);
@@ -44,12 +42,24 @@ export function MySales() {
     );
   }
 
-  const sales = getSalesForSeller(user?.id);
+  // ─── FIX 2: coerce both sides to string for UUID comparison ──
+  // getSalesForSeller compared UUIDs without coercion — DB returns
+  // strings, but local state sometimes has numbers. String() both sides.
+  const sellerId = String(user?.id || "");
+
+  const sales = orders
+    .filter((o) =>
+      o.status !== "cancelled" &&
+      o.items.some((i) => String(i.sellerId) === sellerId)
+    )
+    .map((o) => ({
+      ...o,
+      myItems: o.items.filter((i) => String(i.sellerId) === sellerId),
+    }));
 
   const sortedSales = [...sales].sort((a, b) => {
-    // Waiting confirmation first, then on_way, then delivered
-    const order = { waiting_confirmation: 0, retry_pending: 0, on_way: 1, delivered: 2 };
-    return (order[a.status] ?? 3) - (order[b.status] ?? 3) || b.createdAt - a.createdAt;
+    const statusOrder = { waiting_confirmation: 0, retry_pending: 0, on_way: 1, delivered: 2 };
+    return (statusOrder[a.status] ?? 3) - (statusOrder[b.status] ?? 3) || b.createdAt - a.createdAt;
   });
 
   const copyToClipboard = async (text, key) => {
@@ -82,10 +92,9 @@ export function MySales() {
     const isWaiting = sale.status === "waiting_confirmation" || sale.status === "retry_pending";
     const isOnWay = sale.status === "on_way";
     const isDelivered = sale.status === "delivered";
-    const isGuest = !!sale.buyerGuestId;
+    const isGuestBuyer = !!sale.buyerGuestId;
     const myTotal = sale.myItems.reduce((sum, i) => sum + i.price * i.quantity, 0);
 
-    // Persistent notification on this sale = unconfirmed for 2+ mins
     const ageMs = Date.now() - sale.createdAt;
     const isPersistent = isWaiting && ageMs >= 2 * 60 * 1000;
 
@@ -99,14 +108,13 @@ export function MySales() {
             ? "bg-amber-50 border-2 border-amber-300"
             : "bg-[#FFF6F8]/95 border-2 border-transparent")}
       >
-        {/* Status badge */}
+        {/* Header */}
         <div className="flex items-start justify-between mb-3">
           <div>
             <p className="text-xs text-[#C8B6E2] uppercase tracking-wide">Order</p>
             <p className="text-[#2E2A4A] font-bold tracking-wider">{sale.orderNumber}</p>
             <p className="text-xs text-[#7A6C9D] mt-0.5">{formatTimestamp(sale.createdAt)}</p>
           </div>
-
           <div className="flex flex-col items-end gap-1">
             {isWaiting && (
               <div className={"px-3 py-1 rounded-full text-xs flex items-center gap-1 " +
@@ -133,23 +141,32 @@ export function MySales() {
         <div className="rounded-[12px] bg-[#F6C1CC]/20 p-3 mb-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#F6C1CC] to-[#C8B6E2] flex items-center justify-center flex-shrink-0">
-              {isGuest ? <User className="w-5 h-5 text-white" /> : <User className="w-5 h-5 text-white" />}
+              <User className="w-5 h-5 text-white" />
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-[#2E2A4A] font-medium">
-                {isGuest ? "Guest Buyer" : sale.buyerName}
+                {isGuestBuyer ? "Guest Buyer" : sale.buyerName}
               </p>
               {sale.buyerPhone && (
                 <div className="flex items-center gap-1 text-xs text-[#7A6C9D]">
                   <span>📞 {sale.buyerPhone}</span>
-                  <button onClick={() => copyToClipboard(sale.buyerPhone, "phone_" + sale.id)} className="p-0.5 hover:bg-white/50 rounded">
-                    {copiedKey === "phone_" + sale.id ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
+                  <button
+                    onClick={() => copyToClipboard(sale.buyerPhone, "phone_" + sale.id)}
+                    className="p-0.5 hover:bg-white/50 rounded"
+                  >
+                    {copiedKey === "phone_" + sale.id
+                      ? <Check className="w-3 h-3 text-green-600" />
+                      : <Copy className="w-3 h-3" />}
                   </button>
                 </div>
               )}
+              {sale.address && (
+                <p className="text-xs text-[#7A6C9D] mt-0.5">📍 {sale.address}</p>
+              )}
               {sale.buyerWalletPhone && (
                 <p className="text-xs text-[#7A6C9D]">
-                  💳 {sale.paymentMethod}: <span className="font-mono">{sale.buyerWalletPhone}</span>
+                  💳 {sale.paymentMethod}:{" "}
+                  <span className="font-mono">{sale.buyerWalletPhone}</span>
                 </p>
               )}
             </div>
@@ -160,9 +177,14 @@ export function MySales() {
         <div className="space-y-2 mb-3">
           {sale.myItems.map((item) => (
             <div key={item.id} className="flex items-center gap-3 text-sm">
-              {item.image && <img src={item.image} alt="" className="w-10 h-10 rounded-[8px] object-cover" />}
+              {item.image && (
+                <img src={item.image} alt="" className="w-10 h-10 rounded-[8px] object-cover" />
+              )}
               <div className="flex-1">
-                <p className="text-[#2E2A4A]">{item.name} <span className="text-[#7A6C9D] text-xs">x{item.quantity}</span></p>
+                <p className="text-[#2E2A4A]">
+                  {item.name}{" "}
+                  <span className="text-[#7A6C9D] text-xs">x{item.quantity}</span>
+                </p>
                 <p className="text-xs text-[#C8B6E2]">🚚 {item.delivery}</p>
               </div>
               <p className="text-[#FF8FA3]">Rs. {(item.price * item.quantity).toFixed(2)}</p>
@@ -173,11 +195,13 @@ export function MySales() {
         {/* On Way countdown */}
         {isOnWay && sale.expectedDeliveryAt && (
           <div className="rounded-[10px] bg-[#EDE8F9] p-2 mb-3 text-center">
-            <p className="text-[#4A3A7A] text-xs">Auto-delivering in {formatTimeRemaining(sale.expectedDeliveryAt)}</p>
+            <p className="text-[#4A3A7A] text-xs">
+              Auto-delivering in {formatTimeRemaining(sale.expectedDeliveryAt)}
+            </p>
           </div>
         )}
 
-        {/* Actions */}
+        {/* Waiting actions */}
         {isWaiting && (
           <div className="space-y-2">
             <p className="text-xs text-[#7A6C9D]">
@@ -200,11 +224,9 @@ export function MySales() {
                 </button>
               )}
             </div>
-
-            {/* Cycle indicator */}
             {sale.cycleCount > 0 && (
               <p className="text-xs text-amber-600 text-center">
-                ⚠ This is retry attempt #{sale.cycleCount}. If you send another reminder, the order will auto-cancel.
+                ⚠ This is retry attempt #{sale.cycleCount}. Sending another reminder will auto-cancel the order.
               </p>
             )}
           </div>
@@ -225,7 +247,9 @@ export function MySales() {
             </span>
           </h1>
           <p className="text-[#FFF6F8]/70 text-sm">
-            {sales.length === 0 ? "No sales yet" : sales.length + " order" + (sales.length === 1 ? "" : "s")}
+            {sales.length === 0
+              ? "No sales yet"
+              : sales.length + " order" + (sales.length === 1 ? "" : "s")}
           </p>
         </div>
 
@@ -233,7 +257,9 @@ export function MySales() {
           <div className="text-center py-16">
             <div className="text-6xl mb-4">🛍️</div>
             <p className="text-[#FFF6F8] text-xl">You haven't sold anything yet</p>
-            <p className="text-[#FFF6F8]/60 text-sm mt-2">When buyers order your products, they'll show up here.</p>
+            <p className="text-[#FFF6F8]/60 text-sm mt-2">
+              When buyers order your products, they'll show up here.
+            </p>
           </div>
         ) : (
           <div className="space-y-4">
@@ -251,8 +277,14 @@ export function MySales() {
         message={
           confirmingPayment
             ? "Have you received Rs. " +
-              confirmingPayment.myItems.reduce((s, i) => s + i.price * i.quantity, 0).toFixed(2) +
-              " from " + confirmingPayment.buyerName + " via " + confirmingPayment.paymentMethod + "? Once confirmed, the order will move to On Way."
+              confirmingPayment.myItems
+                .reduce((s, i) => s + i.price * i.quantity, 0)
+                .toFixed(2) +
+              " from " +
+              (confirmingPayment.buyerGuestId ? "a guest buyer" : confirmingPayment.buyerName) +
+              " via " +
+              confirmingPayment.paymentMethod +
+              "? Once confirmed, the order will move to On Way."
             : ""
         }
         confirmText="Yes, Confirm"
@@ -274,14 +306,15 @@ export function MySales() {
               className="w-full max-w-[480px] rounded-[24px] bg-[#FFF6F8] p-10 shadow-2xl border-2 border-amber-300"
             >
               <div className="text-5xl text-center mb-4">⏰</div>
-              <h2 style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3", textShadow: "0 0 20px rgba(255,143,163,0.5)" }} className="text-2xl mb-4 text-center">
+              <h2
+                style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3", textShadow: "0 0 20px rgba(255,143,163,0.5)" }}
+                className="text-2xl mb-4 text-center"
+              >
                 Payment Reminder
               </h2>
-
               <p className="text-[#2E2A4A] mb-3 leading-relaxed">
                 Order <strong>{reminderModal.orderNumber}</strong> hasn't been paid yet.
               </p>
-
               {reminderModal.cycleCount >= 1 ? (
                 <div className="rounded-[12px] bg-red-50 border border-red-200 p-3 mb-4">
                   <p className="text-red-600 text-sm">
@@ -293,7 +326,6 @@ export function MySales() {
                   Send the buyer a reminder so they can retry payment? If you decline, the order will auto-cancel in 1 minute.
                 </p>
               )}
-
               <div className="flex gap-3">
                 <button
                   onClick={handleDeclineReminder}

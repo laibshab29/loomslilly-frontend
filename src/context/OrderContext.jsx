@@ -1,286 +1,451 @@
-import { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
+import {
+  createContext, useContext, useState, useEffect, useRef, useCallback,
+} from "react";
+import { supabase } from "../lib/supabase";
 
 const OrderContext = createContext();
 
-const PERSISTENT_THRESHOLD_MS = 2 * 60 * 1000;
-const AUTO_CANCEL_THRESHOLD_MS = 3 * 60 * 1000;
-const REMINDER_NO_GRACE_MS = 1 * 60 * 1000;
-
 function generateOrderNumber() {
   const date = new Date();
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  const random = Math.random().toString(36).substring(2, 6).toUpperCase();
-  return "LL-" + y + m + d + "-" + random;
+  const y  = date.getFullYear();
+  const m  = String(date.getMonth() + 1).padStart(2, "0");
+  const d  = String(date.getDate()).padStart(2, "0");
+  const rnd = Math.random().toString(36).substring(2, 6).toUpperCase();
+  return `LL-${y}${m}${d}-${rnd}`;
 }
 
-function parseDeliveryDays(deliveryString) {
-  if (!deliveryString) return 5;
-  const matches = String(deliveryString).match(/\d+/g);
-  if (!matches || matches.length === 0) return 5;
-  const nums = matches.map(Number);
-  return Math.max(...nums);
+function parseDeliveryDays(s) {
+  if (!s) return 5;
+  const nums = String(s).match(/\d+/g);
+  if (!nums) return 5;
+  return Math.max(...nums.map(Number));
 }
 
 function getMaxDeliveryMinutes(items) {
-  if (!items || items.length === 0) return 5;
-  return Math.max(...items.map((item) => parseDeliveryDays(item.delivery)));
+  if (!items?.length) return 5;
+  return Math.max(...items.map((i) => parseDeliveryDays(i.delivery)));
+}
+
+function normalizeOrder(row, items = [], wallets = []) {
+  return {
+    id:               row.id,
+    orderNumber:      row.order_number,
+    buyerId:          row.buyer_id          ?? null,
+    buyerGuestId:     row.buyer_guest_id    ?? null,
+    buyerName:        row.buyer_name,
+    buyerPhone:       row.buyer_phone       ?? "",
+    address:          row.address           ?? "",
+    paymentMethod:    row.payment_method    ?? "",
+    buyerWalletPhone: row.buyer_wallet_phone ?? "",
+    paymentProofUrl:  row.payment_proof_url  ?? null,
+    total:            row.total             ?? 0,
+    subtotal:         row.subtotal          ?? 0,
+    shipping:         row.shipping          ?? 0,
+    status:           row.status,
+    createdAt:        new Date(row.created_at).getTime(),
+    confirmedAt:      row.confirmed_at
+      ? new Date(row.confirmed_at).getTime() : null,
+    reviewedAt:       row.reviewed_at
+      ? new Date(row.reviewed_at).getTime() : null,
+    expectedDeliveryAt: row.expected_delivery_at
+      ? new Date(row.expected_delivery_at).getTime() : null,
+    cancelReason:       row.cancel_reason      ?? null,
+    items: items.map((i) => ({
+      id:       i.product_id,
+      name:     i.name,
+      price:    i.price,
+      quantity: i.quantity,
+      delivery: i.delivery,
+      sellerId: i.seller_id,
+    })),
+    sellerWalletInfo: wallets.map((w) => ({
+      sellerId:   w.seller_id,
+      sellerName: w.seller_name,
+      walletType: w.wallet_type,
+      walletPhone: w.wallet_phone,
+      subtotal:   w.subtotal,
+    })),
+  };
+}
+
+// Delete a seller's payment_pending_review notification for a given order.
+// Called when the seller approves OR rejects — the notification has served
+// its purpose and shouldn't linger.
+async function clearPaymentReviewNotification(orderNumber, sellerId) {
+  if (!sellerId || !orderNumber) return;
+  await supabase
+    .from("notifications")
+    .delete()
+    .eq("recipient_id", sellerId)
+    .eq("order_number", orderNumber)
+    .eq("type", "payment_pending_review");
 }
 
 export function OrderProvider({ children }) {
-  const [orders, setOrders] = useState(() => {
-    try {
-      const saved = localStorage.getItem("loomslilly_orders");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [orders,  setOrders]  = useState([]);
+  const [loading, setLoading] = useState(true);
 
   const handlersRef = useRef({
-    notifyNewOrder: () => {},
-    notifyPersistentNewOrder: () => {},
-    notifyPaymentFailure: () => {},
-    notifyOrderCancelled: () => {},
-    notifyDelivered: () => {},
-    notifyPaymentConfirmed: () => {},
-    restoreStock: () => {},
+    notifyOrderPlacedBuyer:     () => {},
+    notifyPaymentPendingSeller: () => {},
+    notifyPaymentConfirmed:     () => {},
+    notifyOrderCancelled:       () => {},
+    notifyDelivered:            () => {},
+    restoreStock:               () => {},
   });
 
   const setExternalHandlers = useCallback((handlers) => {
     handlersRef.current = { ...handlersRef.current, ...handlers };
   }, []);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem("loomslilly_orders", JSON.stringify(orders));
-    } catch (e) {
-      console.warn("orders save failed:", e);
+  // ─── FETCH ────────────────────────────────────────────────────
+  const fetchOrders = useCallback(async () => {
+    const { data: orderRows, error: ordersError } = await supabase
+      .from("orders")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (ordersError) {
+      console.error("fetchOrders — orders error:", ordersError.message);
+      setLoading(false);
+      return;
     }
-  }, [orders]);
 
-  const placeOrder = (cartItems, buyer, details = {}) => {
-    const orderNumber = details.existingOrderNumber || generateOrderNumber();
-    const now = Date.now();
+    if (!orderRows?.length) {
+      setOrders([]);
+      setLoading(false);
+      return;
+    }
 
-    const isCOD = details.paymentMethod === "Cash on Delivery";
-    const initialStatus = isCOD ? "on_way" : "waiting_confirmation";
+    const orderIds = orderRows.map((o) => o.id);
 
-    const newOrder = {
-      id: details.existingOrderNumber
-        ? orders.find((o) => o.orderNumber === details.existingOrderNumber)?.id || Date.now()
-        : Date.now(),
-      orderNumber,
-      buyerId: buyer?.id || null,
-      buyerGuestId: buyer?.id ? null : (details.guestId || null),
-      buyerName: buyer?.name || "Guest",
-      buyerPhone: details.phone || "",
-      items: cartItems,
-      address: details.address || "",
-      paymentMethod: details.paymentMethod || "",
-      buyerWalletPhone: details.buyerWalletPhone || "",
-      sellerWalletInfo: details.sellerWalletInfo || [],
-      total: details.total || 0,
-      subtotal: details.subtotal || 0,
-      shipping: details.shipping || 0,
-      createdAt: now,
-      status: initialStatus,
-      confirmedAt: isCOD ? now : null,
-      expectedDeliveryAt: isCOD ? now + getMaxDeliveryMinutes(cartItems) * 60 * 1000 : null,
-      cycleCount: 0,
-      reminderSent: false,
-      reminderDeclinedAt: null,
-      cancelReason: null,
-    };
+    const [{ data: itemRows, error: itemsError },
+           { data: walletRows, error: walletsError }] = await Promise.all([
+      supabase.from("order_items").select("*").in("order_id", orderIds),
+      supabase.from("order_seller_wallets").select("*").in("order_id", orderIds),
+    ]);
 
-    setOrders((prev) => {
-      if (details.existingOrderNumber) {
-        const existing = prev.find((o) => o.orderNumber === details.existingOrderNumber);
-        if (existing) {
-          return prev.map((o) =>
-            o.orderNumber === details.existingOrderNumber
-              ? {
-                  ...newOrder,
-                  id: existing.id,
-                  createdAt: now,
-                  cycleCount: (existing.cycleCount || 0) + 1,
-                  reminderSent: false,
-                  reminderDeclinedAt: null,
-                  cancelReason: null,
-                }
-              : o
-          );
-        }
-      }
-      return [...prev, newOrder];
+    if (itemsError)   console.error("fetchOrders — items error:",   itemsError.message);
+    if (walletsError) console.error("fetchOrders — wallets error:", walletsError.message);
+
+    const normalized = orderRows.map((row) => {
+      const items   = (itemRows   || []).filter((i) => i.order_id === row.id);
+      const wallets = (walletRows || []).filter((w) => w.order_id === row.id);
+      return normalizeOrder(row, items, wallets);
     });
 
-    if (!isCOD) {
+    setOrders(normalized);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetchOrders();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (["SIGNED_IN", "INITIAL_SESSION", "TOKEN_REFRESHED", "SIGNED_OUT"]
+        .includes(event)) {
+        fetchOrders();
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [fetchOrders]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel("orders_realtime")
+      .on("postgres_changes",
+        { event: "*", schema: "public", table: "orders" },
+        () => fetchOrders())
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
+  }, [fetchOrders]);
+
+  // ─── PLACE ORDER ─────────────────────────────────────────────
+  // Flow:
+  //   COD or Card        → status = on_way (instant)
+  //   JazzCash/EasyPaisa → status = waiting_confirmation, seller reviews proof
+  //
+  // For wallet payments, `details.paymentProofUrl` must be set — the buyer
+  // uploads to Storage first, then calls placeOrder with the URL.
+  const placeOrder = async (cartItems, buyer, details = {}) => {
+    const orderNumber = generateOrderNumber();
+    const now         = new Date().toISOString();
+    const nowMs       = Date.now();
+
+    const method = details.paymentMethod;
+    const isInstant = method === "Cash on Delivery" || method === "Card";
+
+    const initialStatus = isInstant ? "on_way" : "waiting_confirmation";
+    const expectedDeliveryAt = isInstant
+      ? new Date(nowMs + getMaxDeliveryMinutes(cartItems) * 60 * 1000).toISOString()
+      : null;
+
+    const isGuestBuyer = !buyer?.id || String(buyer.id).startsWith("guest_");
+
+    const { data: newOrderRow, error: orderError } = await supabase
+      .from("orders")
+      .insert({
+        order_number:        orderNumber,
+        buyer_id:            isGuestBuyer ? null : buyer.id,
+        buyer_guest_id:      isGuestBuyer ? (details.guestId || null) : null,
+        buyer_name:          buyer?.name || "Guest",
+        buyer_phone:         details.phone || "",
+        address:             details.address || "",
+        payment_method:      method || "",
+        buyer_wallet_phone:  details.buyerWalletPhone || "",
+        payment_proof_url:   details.paymentProofUrl || null,
+        total:               details.total    || 0,
+        subtotal:            details.subtotal || 0,
+        shipping:            details.shipping || 0,
+        status:              initialStatus,
+        confirmed_at:        isInstant ? now : null,
+        expected_delivery_at: expectedDeliveryAt,
+        cancel_reason:       null,
+      })
+      .select()
+      .single();
+
+    if (orderError) { console.error("placeOrder insert error:", orderError.message); return null; }
+
+    // ── INSERT order_items ──
+    const itemRows = cartItems.map((item) => ({
+      order_id:   newOrderRow.id,
+      product_id: item.id,
+      seller_id:  item.sellerId,
+      name:       item.name,
+      price:      item.price,
+      quantity:   item.quantity,
+      delivery:   item.delivery || "",
+    }));
+
+    const { error: itemsError } = await supabase.from("order_items").insert(itemRows);
+    if (itemsError) console.error("placeOrder items error:", itemsError.message);
+
+    // ── INSERT order_seller_wallets (only for wallet payments) ──
+    if (details.sellerWalletInfo?.length > 0) {
+      const walletRows = details.sellerWalletInfo.map((w) => ({
+        order_id:    newOrderRow.id,
+        seller_id:   w.sellerId,
+        seller_name: w.sellerName,
+        wallet_type: w.walletType,
+        wallet_phone: w.walletPhone,
+        subtotal:    w.subtotal,
+      }));
+      const { error: walletError } = await supabase
+        .from("order_seller_wallets").insert(walletRows);
+      if (walletError) console.error("placeOrder wallets error:", walletError.message);
+    }
+
+    await fetchOrders();
+
+    const newOrder = normalizeOrder(newOrderRow, itemRows, []);
+
+    // ─── NOTIFICATIONS ────────────────────────────────────────
+    const buyerRecipient = newOrder.buyerId || newOrder.buyerGuestId;
+    if (buyerRecipient) {
+      handlersRef.current.notifyOrderPlacedBuyer(buyerRecipient, newOrder);
+    }
+
+    // For wallet payments, notify each seller with the proof for review.
+    // For instant payments (COD/Card), no seller approval needed.
+    if (!isInstant) {
       const sellerIds = [...new Set(cartItems.map((i) => i.sellerId).filter(Boolean))];
-      sellerIds.forEach((sellerId) => {
-        handlersRef.current.notifyNewOrder(sellerId, newOrder);
-      });
+      sellerIds.forEach((sid) =>
+        handlersRef.current.notifyPaymentPendingSeller(sid, newOrder)
+      );
     }
 
     return newOrder;
   };
 
-  // 🔥 UPDATED: now fires payment-confirmed notif to buyer
-  const confirmPayment = (orderNumber) => {
+  // ─── APPROVE PAYMENT (seller says yes) ───────────────────────
+  // Fresh-read guard so a stale local snapshot can't resurrect a cancelled order.
+  const approvePayment = async (orderNumber) => {
     const order = orders.find((o) => o.orderNumber === orderNumber);
     if (!order) return;
+    if (order.status !== "waiting_confirmation") return;
 
-    setOrders((prev) =>
-      prev.map((o) => {
-        if (o.orderNumber !== orderNumber) return o;
-        if (o.status !== "waiting_confirmation") return o;
-        const now = Date.now();
-        return {
-          ...o,
-          status: "on_way",
-          confirmedAt: now,
-          expectedDeliveryAt: now + getMaxDeliveryMinutes(o.items) * 60 * 1000,
-        };
-      })
-    );
+    const { data: fresh, error: fetchErr } = await supabase
+      .from("orders")
+      .select("status")
+      .eq("order_number", orderNumber)
+      .single();
 
-    // Notify buyer that payment was confirmed
-    const buyerRecipient = order.buyerId || order.buyerGuestId;
-    if (buyerRecipient) {
-      handlersRef.current.notifyPaymentConfirmed(buyerRecipient, order);
-    }
-  };
-
-  const sendPaymentReminder = (orderNumber) => {
-    const order = orders.find((o) => o.orderNumber === orderNumber);
-    if (!order) return;
-
-    if (order.cycleCount >= 1) {
-      cancelOrder(orderNumber, "Payment not received after retry");
+    if (fetchErr) { console.error("approvePayment fetch error:", fetchErr.message); return; }
+    if (fresh.status !== "waiting_confirmation") {
+      await fetchOrders();
       return;
     }
 
-    setOrders((prev) =>
-      prev.map((o) =>
-        o.orderNumber === orderNumber
-          ? { ...o, status: "retry_pending", reminderSent: true }
-          : o
-      )
-    );
+    const now = new Date().toISOString();
+    const expectedDeliveryAt = new Date(
+      Date.now() + getMaxDeliveryMinutes(order.items) * 60 * 1000
+    ).toISOString();
 
-    if (order.buyerId || order.buyerGuestId) {
-      handlersRef.current.notifyPaymentFailure(order.buyerId || order.buyerGuestId, order);
-    }
+    const { error } = await supabase
+      .from("orders")
+      .update({
+        status:               "on_way",
+        confirmed_at:         now,
+        reviewed_at:          now,
+        expected_delivery_at: expectedDeliveryAt,
+      })
+      .eq("order_number", orderNumber);
+
+    if (error) { console.error("approvePayment error:", error.message); return; }
+
+    const sellerIdsForOrder = [...new Set(order.items.map((i) => i.sellerId).filter(Boolean))];
+    await Promise.all(sellerIdsForOrder.map((sid) =>
+      clearPaymentReviewNotification(orderNumber, sid)
+    ));
+
+    await fetchOrders();
+
+    const buyerRecipient = order.buyerId || order.buyerGuestId;
+    if (buyerRecipient) handlersRef.current.notifyPaymentConfirmed(buyerRecipient, order);
   };
 
-  const declineReminder = (orderNumber) => {
-    setOrders((prev) =>
-      prev.map((o) =>
-        o.orderNumber === orderNumber
-          ? { ...o, reminderDeclinedAt: Date.now() }
-          : o
-      )
-    );
-  };
-
-  const cancelOrder = (orderNumber, reason = "Order cancelled") => {
+  // ─── REJECT PAYMENT (seller says no) ─────────────────────────
+  const rejectPayment = async (orderNumber, reason = "Payment proof rejected by seller") => {
     const order = orders.find((o) => o.orderNumber === orderNumber);
     if (!order) return;
+    if (order.status !== "waiting_confirmation") return;
+
+    const { data: fresh, error: fetchErr } = await supabase
+      .from("orders")
+      .select("status")
+      .eq("order_number", orderNumber)
+      .single();
+
+    if (fetchErr) { console.error("rejectPayment fetch error:", fetchErr.message); return; }
+    if (fresh.status !== "waiting_confirmation") {
+      await fetchOrders();
+      return;
+    }
 
     handlersRef.current.restoreStock(order.items);
 
-    setOrders((prev) =>
-      prev.map((o) =>
-        o.orderNumber === orderNumber
-          ? { ...o, status: "cancelled", cancelReason: reason }
-          : o
-      )
-    );
+    const { error } = await supabase
+      .from("orders")
+      .update({
+        status:        "cancelled",
+        cancel_reason: reason,
+        reviewed_at:   new Date().toISOString(),
+      })
+      .eq("order_number", orderNumber);
 
-    const recipientId = order.buyerId || order.buyerGuestId;
-    if (recipientId) {
-      handlersRef.current.notifyOrderCancelled(recipientId, order, reason);
-    }
+    if (error) { console.error("rejectPayment error:", error.message); return; }
+
+    const sellerIdsForOrder = [...new Set(order.items.map((i) => i.sellerId).filter(Boolean))];
+    await Promise.all(sellerIdsForOrder.map((sid) =>
+      clearPaymentReviewNotification(orderNumber, sid)
+    ));
+
+    await fetchOrders();
+
+    const buyerRecipient = order.buyerId || order.buyerGuestId;
+    if (buyerRecipient) handlersRef.current.notifyOrderCancelled(buyerRecipient, order, reason);
   };
 
+  // ─── BUYER-INITIATED CANCEL (from My Orders, before delivery) ────────────
+  const cancelOrder = async (orderNumber, reason = "Order cancelled by buyer") => {
+    const order = orders.find((o) => o.orderNumber === orderNumber);
+    if (!order) return false;
+    if (order.status === "delivered" || order.status === "cancelled") return false;
+
+    handlersRef.current.restoreStock(order.items);
+
+    const { error } = await supabase
+      .from("orders")
+      .update({ status: "cancelled", cancel_reason: reason })
+      .eq("order_number", orderNumber);
+
+    if (error) { console.error("cancelOrder error:", error.message); return false; }
+
+    const sellerIdsForOrder = [...new Set(order.items.map((i) => i.sellerId).filter(Boolean))];
+    await Promise.all(sellerIdsForOrder.map((sid) =>
+      clearPaymentReviewNotification(orderNumber, sid)
+    ));
+
+    await fetchOrders();
+
+    const buyerRecipient = order.buyerId || order.buyerGuestId;
+    if (buyerRecipient) handlersRef.current.notifyOrderCancelled(buyerRecipient, order, reason);
+    return true;
+  };
+
+  // ─── AUTO-DELIVER TICK ───────────────────────────────────────
+  // Only one job left: flip on_way orders to delivered when their
+  // expected_delivery_at has passed. No reminder logic, no auto-cancel.
   useEffect(() => {
-    const tick = () => {
-      const now = Date.now();
-      const ordersToProcess = orders;
+    if (loading) return;
 
-      ordersToProcess.forEach((order) => {
-        if (order.status === "waiting_confirmation") {
-          const age = now - order.createdAt;
+    const processingRef = { current: false };
 
-          if (age >= PERSISTENT_THRESHOLD_MS && age < PERSISTENT_THRESHOLD_MS + 11000) {
-            const sellerIds = [...new Set(order.items.map((i) => i.sellerId).filter(Boolean))];
-            sellerIds.forEach((sellerId) => {
-              handlersRef.current.notifyPersistentNewOrder(sellerId, order);
-            });
-          }
+    const tick = async () => {
+      if (processingRef.current) return;
+      processingRef.current = true;
+      try {
+        const now = Date.now();
+        for (const order of orders) {
+          if (order.status === "on_way" && order.expectedDeliveryAt) {
+            if (now >= order.expectedDeliveryAt) {
+              const { error } = await supabase
+                .from("orders")
+                .update({
+                  status:       "delivered",
+                  delivered_at: new Date().toISOString(),
+                })
+                .eq("order_number", order.orderNumber);
 
-          if (age >= AUTO_CANCEL_THRESHOLD_MS && !order.reminderSent && !order.reminderDeclinedAt) {
-            cancelOrder(order.orderNumber, "Payment not confirmed within time limit");
-            return;
-          }
-
-          if (order.reminderDeclinedAt && now - order.reminderDeclinedAt >= REMINDER_NO_GRACE_MS) {
-            cancelOrder(order.orderNumber, "Payment reminder declined and not received");
-            return;
-          }
-        }
-
-        if (order.status === "on_way" && order.expectedDeliveryAt && now >= order.expectedDeliveryAt) {
-          setOrders((prev) =>
-            prev.map((o) =>
-              o.orderNumber === order.orderNumber
-                ? { ...o, status: "delivered", deliveredAt: now }
-                : o
-            )
-          );
-
-          const recipientId = order.buyerId || order.buyerGuestId;
-          if (recipientId) {
-            handlersRef.current.notifyDelivered(recipientId, order);
+              if (!error) {
+                const recipientId = order.buyerId || order.buyerGuestId;
+                if (recipientId) handlersRef.current.notifyDelivered(recipientId, order);
+              }
+            }
           }
         }
-      });
+      } finally {
+        processingRef.current = false;
+      }
     };
 
     const interval = setInterval(tick, 10000);
     tick();
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orders]);
+  }, [orders, loading]);
 
-  const getOrdersForBuyer = (buyerId, guestId) => {
-    return orders.filter((o) => {
+  // ─── QUERY HELPERS ────────────────────────────────────────────
+  const getOrdersForBuyer = (buyerId, guestId) =>
+    orders.filter((o) => {
       if (buyerId && o.buyerId === buyerId) return true;
       if (guestId && o.buyerGuestId === guestId) return true;
       return false;
     });
-  };
 
   const getSalesForSeller = (sellerId) => {
+    const sid = String(sellerId);
     return orders
-      .filter((o) =>
-        o.items.some((i) => i.sellerId === sellerId) && o.status !== "cancelled"
+      .filter(
+        (o) =>
+          o.status !== "cancelled" &&
+          o.items.some((i) => String(i.sellerId) === sid)
       )
       .map((o) => ({
         ...o,
-        myItems: o.items.filter((i) => i.sellerId === sellerId),
+        myItems: o.items.filter((i) => String(i.sellerId) === sid),
       }));
   };
 
   const getSellerSales = (sellerId) => {
+    const sid = String(sellerId);
     let total = 0;
     orders.forEach((order) => {
       if (order.status === "cancelled") return;
       order.items.forEach((item) => {
-        if (item.sellerId === sellerId) {
-          total += item.quantity;
-        }
+        if (String(item.sellerId) === sid) total += item.quantity;
       });
     });
     return total;
@@ -289,20 +454,22 @@ export function OrderProvider({ children }) {
   const getOrderByNumber = (orderNumber) =>
     orders.find((o) => o.orderNumber === orderNumber);
 
+  if (loading) return null;
+
   return (
     <OrderContext.Provider
       value={{
         orders,
         placeOrder,
-        confirmPayment,
-        sendPaymentReminder,
-        declineReminder,
+        approvePayment,
+        rejectPayment,
         cancelOrder,
         getOrdersForBuyer,
         getSalesForSeller,
         getSellerSales,
         getOrderByNumber,
         setExternalHandlers,
+        fetchOrders,
       }}
     >
       {children}

@@ -1,4 +1,4 @@
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { useState } from "react";
 import { X, Upload } from "lucide-react";
 import { useProducts } from "../context/ProductContext";
@@ -19,15 +19,15 @@ export function UploadProduct() {
     type: "",
     price: 1,
     stock: 1,
-    likes: 0,
     details: "",
     delivery: "",
-    images: [], // array of base64
+    images: [], // base64 strings — addProduct uploads them to Storage
   });
 
   const [errors, setErrors] = useState({});
   const [submitted, setSubmitted] = useState(false);
-  const [previews, setPreviews] = useState([]); // array of base64 for preview
+  const [uploading, setUploading] = useState(false); // true while Supabase upload runs
+  const [previews, setPreviews] = useState([]);       // base64 for local preview only
 
   const handleChange = (field, value) => {
     setFormData((prev) => {
@@ -55,7 +55,7 @@ export function UploadProduct() {
       reader.readAsDataURL(file);
     });
 
-    // Clear input so same file can be re-selected
+    // Reset so same file can be re-selected
     e.target.value = "";
   };
 
@@ -67,31 +67,44 @@ export function UploadProduct() {
     }));
   };
 
-  const handleSubmit = (e) => {
+  // ─── SUBMIT ──────────────────────────────────────────────────
+  // Now async — waits for Supabase Storage uploads to finish
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    let newErrors = {};
 
+    const newErrors = {};
     if (!formData.name) newErrors.name = "Product name is required";
-    if (!formData.price || Number(formData.price) <= 0) newErrors.price = "Valid price is required";
+    if (!formData.price || Number(formData.price) <= 0)
+      newErrors.price = "Valid price is required";
     if (!formData.details) newErrors.details = "Details are required";
     if (!formData.delivery) newErrors.delivery = "Delivery time required";
-    if (formData.images.length === 0) newErrors.images = "At least one image is required";
+    if (formData.images.length === 0)
+      newErrors.images = "At least one image is required";
 
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
       return;
     }
 
-    addProduct(
+    setUploading(true);
+
+    const result = await addProduct(
       {
         ...formData,
-        image: formData.images[0] || null,
         category: formData.category.toLowerCase(),
         type: formData.type.toLowerCase(),
         price: parseFloat(formData.price),
+        stock: parseInt(formData.stock) || 0,
       },
       user
     );
+
+    setUploading(false);
+
+    if (result?.success === false) {
+      setErrors({ submit: result.message || "Upload failed. Please try again." });
+      return;
+    }
 
     setSubmitted(true);
     setTimeout(() => navigate("/"), 1500);
@@ -104,39 +117,65 @@ export function UploadProduct() {
         {/* HEADER */}
         <motion.div className="text-center mb-12">
           <h1 className="text-5xl lg:text-6xl mb-4">
-            <span style={{ fontFamily: "Fredoka, sans-serif", color: "#F4F1F8" }}>Upload </span>
-            <span style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3", textShadow: "0 0 35px rgba(255,143,163,0.7)" }}>
+            <span style={{ fontFamily: "Fredoka, sans-serif", color: "#F4F1F8" }}>
+              Upload{" "}
+            </span>
+            <span
+              style={{
+                fontFamily: "Pacifico, cursive",
+                color: "#FF8FA3",
+                textShadow: "0 0 35px rgba(255,143,163,0.7)",
+              }}
+            >
               Product
             </span>
           </h1>
-          <p className="text-xl text-[#FFF6F8]">Add your creation to the marketplace</p>
+          <p className="text-xl text-[#FFF6F8]">
+            Add your creation to the marketplace
+          </p>
         </motion.div>
 
         {/* SUCCESS */}
         {submitted ? (
           <div className="rounded-[24px] bg-[#FFF6F8]/90 p-12 text-center">
             <div className="text-6xl mb-4">✅</div>
-            <h2 style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3" }} className="text-3xl">
+            <h2
+              style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3" }}
+              className="text-3xl"
+            >
               Product Uploaded!
             </h2>
           </div>
         ) : (
           <div className="rounded-[24px] bg-[#FFF6F8]/90 p-8">
+            {errors.submit && (
+              <p className="text-red-500 text-center mb-4">{errors.submit}</p>
+            )}
+
             <form onSubmit={handleSubmit} className="space-y-6">
 
               {/* IMAGE UPLOAD */}
               <div>
                 <p className="text-[#7A6C9D] text-sm mb-2">
                   Product Images <span className="text-[#FF8FA3]">*</span>{" "}
-                  <span className="text-xs text-[#C8B6E2]">(up to 5, any file type)</span>
+                  <span className="text-xs text-[#C8B6E2]">
+                    (up to 5, any file type)
+                  </span>
                 </p>
 
                 {/* PREVIEWS */}
                 {previews.length > 0 && (
                   <div className="flex flex-wrap gap-3 mb-3">
                     {previews.map((src, i) => (
-                      <div key={i} className="relative w-20 h-20 rounded-[12px] overflow-hidden border-2 border-[#FF8FA3]/40">
-                        <img src={src} alt={`preview-${i}`} className="w-full h-full object-cover" />
+                      <div
+                        key={i}
+                        className="relative w-20 h-20 rounded-[12px] overflow-hidden border-2 border-[#FF8FA3]/40"
+                      >
+                        <img
+                          src={src}
+                          alt={`preview-${i}`}
+                          className="w-full h-full object-cover"
+                        />
                         {i === 0 && (
                           <span className="absolute bottom-0 left-0 right-0 text-center text-[10px] bg-[#FF8FA3]/80 text-white py-0.5">
                             Main
@@ -169,11 +208,14 @@ export function UploadProduct() {
                       multiple
                       onChange={handleImageUpload}
                       className="hidden"
+                      disabled={uploading}
                     />
                   </label>
                 )}
 
-                {errors.images && <p className="text-red-500 text-sm mt-1">{errors.images}</p>}
+                {errors.images && (
+                  <p className="text-red-500 text-sm mt-1">{errors.images}</p>
+                )}
               </div>
 
               {/* NAME */}
@@ -183,8 +225,11 @@ export function UploadProduct() {
                   value={formData.name}
                   onChange={(e) => handleChange("name", e.target.value)}
                   className={inputStyle}
+                  disabled={uploading}
                 />
-                {errors.name && <p className="text-red-500 text-sm mt-1">{errors.name}</p>}
+                {errors.name && (
+                  <p className="text-red-500 text-sm mt-1">{errors.name}</p>
+                )}
               </div>
 
               {/* CATEGORY */}
@@ -193,6 +238,7 @@ export function UploadProduct() {
                   value={formData.category}
                   onChange={(e) => handleChange("category", e.target.value)}
                   className={inputStyle}
+                  disabled={uploading}
                 >
                   <option value="">Select Category</option>
                   <option value="crafts">Crafts</option>
@@ -206,6 +252,7 @@ export function UploadProduct() {
                   value={formData.type}
                   onChange={(e) => handleChange("type", e.target.value)}
                   className={inputStyle}
+                  disabled={uploading}
                 >
                   <option value="">Select Subcategory</option>
                   {formData.category === "crafts" && (
@@ -235,15 +282,23 @@ export function UploadProduct() {
                     const value = e.target.value;
                     handleChange("price", value);
                     if (!value || Number(value) <= 0) {
-                      setErrors((prev) => ({ ...prev, price: "Price must be greater than 0" }));
+                      setErrors((prev) => ({
+                        ...prev,
+                        price: "Price must be greater than 0",
+                      }));
                     } else {
                       setErrors((prev) => ({ ...prev, price: "" }));
                     }
                   }}
                   className={inputStyle}
+                  disabled={uploading}
                 />
-                <p className="text-[#7A6C9D] text-sm mt-1">Price is in PKR (Rupees)</p>
-                {errors.price && <p className="text-red-500 text-sm mt-1">{errors.price}</p>}
+                <p className="text-[#7A6C9D] text-sm mt-1">
+                  Price is in PKR (Rupees)
+                </p>
+                {errors.price && (
+                  <p className="text-red-500 text-sm mt-1">{errors.price}</p>
+                )}
               </div>
 
               {/* STOCK */}
@@ -253,10 +308,15 @@ export function UploadProduct() {
                   type="number"
                   min="0"
                   value={formData.stock}
-                  onChange={(e) => handleChange("stock", Math.max(0, Number(e.target.value)))}
+                  onChange={(e) =>
+                    handleChange("stock", Math.max(0, Number(e.target.value)))
+                  }
                   className={inputStyle}
+                  disabled={uploading}
                 />
-                <p className="text-[#7A6C9D] text-sm mt-1">Available quantity</p>
+                <p className="text-[#7A6C9D] text-sm mt-1">
+                  Available quantity
+                </p>
               </div>
 
               {/* DETAILS */}
@@ -267,8 +327,11 @@ export function UploadProduct() {
                   value={formData.details}
                   onChange={(e) => handleChange("details", e.target.value)}
                   className={inputStyle}
+                  disabled={uploading}
                 />
-                {errors.details && <p className="text-red-500 text-sm mt-1">{errors.details}</p>}
+                {errors.details && (
+                  <p className="text-red-500 text-sm mt-1">{errors.details}</p>
+                )}
               </div>
 
               {/* DELIVERY */}
@@ -278,17 +341,27 @@ export function UploadProduct() {
                   value={formData.delivery}
                   onChange={(e) => handleChange("delivery", e.target.value)}
                   className={inputStyle}
+                  disabled={uploading}
                 />
-                {errors.delivery && <p className="text-red-500 text-sm mt-1">{errors.delivery}</p>}
+                {errors.delivery && (
+                  <p className="text-red-500 text-sm mt-1">{errors.delivery}</p>
+                )}
               </div>
 
               {/* SUBMIT */}
               <button
                 type="submit"
-                className="w-full py-4 rounded-full bg-[#FF8FA3] text-white hover:scale-[1.02] transition-all shadow-lg text-lg"
+                disabled={uploading}
+                className="w-full py-4 rounded-full bg-[#FF8FA3] text-white hover:scale-[1.02] transition-all shadow-lg text-lg disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100"
               >
-                Upload Product
+                {uploading ? "Uploading… please wait" : "Upload Product"}
               </button>
+
+              {uploading && (
+                <p className="text-center text-[#7A6C9D] text-sm">
+                  Uploading your images to the server, this may take a moment...
+                </p>
+              )}
             </form>
           </div>
         )}

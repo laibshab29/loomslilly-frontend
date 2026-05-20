@@ -5,11 +5,12 @@ import {
   X, Eye, EyeOff, CheckSquare, Square, ShoppingBag, MapPin, Phone, Copy, Check,
 } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams, Link } from "react-router-dom";
 import { useCart } from "../context/CartContext";
 import { useOrders } from "../context/OrderContext";
 import { useAuth } from "../context/AuthContext";
 import { useProducts } from "../context/ProductContext";
+import { useNotifications } from "../context/NotificationContext";
 
 function PortalModal({ children }) {
   return createPortal(children, document.body);
@@ -176,9 +177,9 @@ function DeliveryDetailsModal({ isOpen, onClose, onContinue, defaultAddress, def
 }
 
 // ─── PAYMENT MODAL ─────────────────────────────────────────────
-function PaymentModal({ isOpen, onClose, onSuccess, total, sellerWalletMap, items, getUserById }) {
+function PaymentModal({ isOpen, onClose, onSuccess, total, items, sellerProfiles, loadingProfiles }) {
   const [step, setStep] = useState("choose");
-  const [payType, setPayType] = useState(""); // "jazzcash" | "easypaisa"
+  const [payType, setPayType] = useState("");
   const [buyerWalletPhone, setBuyerWalletPhone] = useState("");
   const [phoneError, setPhoneError] = useState("");
   const [copiedKey, setCopiedKey] = useState("");
@@ -194,30 +195,29 @@ function PaymentModal({ isOpen, onClose, onSuccess, total, sellerWalletMap, item
     }
   }, [isOpen]);
 
-  // For JazzCash/EasyPaisa: group items by seller, look up each seller's wallet
   const sellerGroups = useMemo(() => {
     if (!payType || (payType !== "jazzcash" && payType !== "easypaisa")) return [];
     const groups = {};
     items.forEach((item) => {
-      const sellerId = item.sellerId;
-      if (!groups[sellerId]) {
-        const seller = getUserById?.(sellerId);
+      const sid = String(item.sellerId);
+      if (!groups[sid]) {
+        const profile = sellerProfiles?.[sid];
         const walletPhone = payType === "jazzcash"
-          ? seller?.jazzcashPhone
-          : seller?.easypaisaPhone;
-        groups[sellerId] = {
-          sellerId,
-          sellerName: seller?.name || "Seller",
+          ? profile?.jazzcashPhone
+          : profile?.easypaisaPhone;
+        groups[sid] = {
+          sellerId: sid,
+          sellerName: profile?.name || "Seller",
           walletPhone: walletPhone || null,
           items: [],
           subtotal: 0,
         };
       }
-      groups[sellerId].items.push(item);
-      groups[sellerId].subtotal += item.price * item.quantity;
+      groups[sid].items.push(item);
+      groups[sid].subtotal += item.price * item.quantity;
     });
     return Object.values(groups);
-  }, [payType, items, getUserById]);
+  }, [payType, items, sellerProfiles]);
 
   const hasUnavailableSeller = sellerGroups.some((g) => !g.walletPhone);
 
@@ -227,7 +227,6 @@ function PaymentModal({ isOpen, onClose, onSuccess, total, sellerWalletMap, item
       setCopiedKey(key);
       setTimeout(() => setCopiedKey(""), 1500);
     } catch {
-      // Fallback
       const textarea = document.createElement("textarea");
       textarea.value = text;
       document.body.appendChild(textarea);
@@ -299,10 +298,8 @@ function PaymentModal({ isOpen, onClose, onSuccess, total, sellerWalletMap, item
             >
               <div className="flex items-center justify-between mb-6">
                 <h2 style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3" }} className="text-2xl">
-                  {step === "choose"
-                    ? "Choose Payment"
-                    : step === "card"
-                    ? "Card Details"
+                  {step === "choose" ? "Choose Payment"
+                    : step === "card" ? "Card Details"
                     : `${payType === "jazzcash" ? "JazzCash" : "EasyPaisa"} Payment`}
                 </h2>
                 <button onClick={onClose}><X className="w-5 h-5 text-[#7A6C9D]" /></button>
@@ -315,17 +312,18 @@ function PaymentModal({ isOpen, onClose, onSuccess, total, sellerWalletMap, item
               {step === "choose" && (
                 <div className="space-y-3">
                   {[
-                    { id: "cod", label: "Cash on Delivery", icon: Banknote, desc: "Pay when your order arrives" },
-                    { id: "card", label: "Debit / Credit Card", icon: CreditCard, desc: "Visa, Mastercard, UnionPay" },
-                    { id: "jazzcash", label: "JazzCash", icon: Smartphone, desc: "Pay via JazzCash mobile wallet" },
-                    { id: "easypaisa", label: "EasyPaisa", icon: Smartphone, desc: "Pay via EasyPaisa mobile wallet" },
+                    { id: "cod",       label: "Cash on Delivery",    icon: Banknote,    desc: "Pay when your order arrives" },
+                    { id: "card",      label: "Debit / Credit Card", icon: CreditCard,  desc: "Visa, Mastercard, UnionPay" },
+                    { id: "jazzcash",  label: "JazzCash",            icon: Smartphone,  desc: "Pay via JazzCash mobile wallet" },
+                    { id: "easypaisa", label: "EasyPaisa",           icon: Smartphone,  desc: "Pay via EasyPaisa mobile wallet" },
                   ].map((opt) => (
                     <button
                       key={opt.id}
                       onClick={() => {
-                        if (opt.id === "cod") { onSuccess({ method: "Cash on Delivery" }); return; }
+                        if (opt.id === "cod")  { onSuccess({ method: "Cash on Delivery" }); return; }
                         if (opt.id === "card") { setStep("card"); return; }
-                        setPayType(opt.id); setStep("wallet");
+                        setPayType(opt.id);
+                        setStep("wallet");
                       }}
                       className="w-full flex items-center gap-4 px-5 py-4 rounded-[16px] bg-[#F6C1CC]/20 border-2 border-[#7A6C9D]/10 hover:border-[#FF8FA3]/50 hover:bg-[#F6C1CC]/30 transition-all text-left"
                     >
@@ -379,85 +377,91 @@ function PaymentModal({ isOpen, onClose, onSuccess, total, sellerWalletMap, item
 
               {step === "wallet" && (
                 <div className="space-y-4">
-
-                  {hasUnavailableSeller && (
-                    <div className="rounded-[14px] bg-red-50 border border-red-200 p-4">
-                      <p className="text-red-500 text-sm font-medium mb-1">⚠ Some sellers haven't set up this wallet</p>
-                      <p className="text-red-400 text-xs">
-                        Pick a different payment method, or contact the seller(s) below.
-                      </p>
+                  {loadingProfiles ? (
+                    <div className="text-center py-8 text-[#7A6C9D]">
+                      <div className="text-3xl mb-3">⏳</div>
+                      <p className="text-sm">Loading seller wallet info...</p>
                     </div>
-                  )}
-
-                  <p className="text-[#7A6C9D] text-sm">
-                    Send the amount to each seller's wallet below, then enter your wallet number so they can verify your payment.
-                  </p>
-
-                  {/* Seller wallets */}
-                  <div className="space-y-3">
-                    {sellerGroups.map((g) => (
-                      <div key={g.sellerId} className="rounded-[14px] bg-[#EDE8F9] border border-[#C8B6E2] p-4">
-                        <div className="flex items-center justify-between mb-2">
-                          <div>
-                            <p className="text-xs text-[#7A6C9D]">Pay to seller</p>
-                            <p className="text-[#2E2A4A] font-medium">{g.sellerName}</p>
-                          </div>
-                          <p className="text-[#FF8FA3] font-semibold">Rs. {g.subtotal.toFixed(2)}</p>
-                        </div>
-
-                        {g.walletPhone ? (
-                          <div className="flex items-center gap-2 bg-white rounded-[10px] px-3 py-2">
-                            <span className="text-[#2E2A4A] font-mono text-lg flex-1">{g.walletPhone}</span>
-                            <button
-                              onClick={() => copyToClipboard(g.walletPhone, "seller_" + g.sellerId)}
-                              className="p-1.5 rounded-full hover:bg-[#F6C1CC]/40 transition-all"
-                              title="Copy number"
-                            >
-                              {copiedKey === "seller_" + g.sellerId
-                                ? <Check className="w-4 h-4 text-green-500" />
-                                : <Copy className="w-4 h-4 text-[#7A6C9D]" />}
-                            </button>
-                          </div>
-                        ) : (
-                          <p className="text-red-400 text-xs italic">
-                            This seller doesn't accept {payType === "jazzcash" ? "JazzCash" : "EasyPaisa"}.
+                  ) : (
+                    <>
+                      {hasUnavailableSeller && (
+                        <div className="rounded-[14px] bg-red-50 border border-red-200 p-4">
+                          <p className="text-red-500 text-sm font-medium mb-1">⚠ Some sellers haven't set up this wallet</p>
+                          <p className="text-red-400 text-xs">
+                            Pick a different payment method, or contact the seller(s) below.
                           </p>
-                        )}
+                        </div>
+                      )}
+
+                      <p className="text-[#7A6C9D] text-sm">
+                        Send the amount to each seller's wallet below, then enter your wallet number so they can verify your payment.
+                      </p>
+
+                      <div className="space-y-3">
+                        {sellerGroups.map((g) => (
+                          <div key={g.sellerId} className="rounded-[14px] bg-[#EDE8F9] border border-[#C8B6E2] p-4">
+                            <div className="flex items-center justify-between mb-2">
+                              <div>
+                                <p className="text-xs text-[#7A6C9D]">Pay to seller</p>
+                                <p className="text-[#2E2A4A] font-medium">{g.sellerName}</p>
+                              </div>
+                              <p className="text-[#FF8FA3] font-semibold">Rs. {g.subtotal.toFixed(2)}</p>
+                            </div>
+
+                            {g.walletPhone ? (
+                              <div className="flex items-center gap-2 bg-white rounded-[10px] px-3 py-2">
+                                <span className="text-[#2E2A4A] font-mono text-lg flex-1">{g.walletPhone}</span>
+                                <button
+                                  onClick={() => copyToClipboard(g.walletPhone, "seller_" + g.sellerId)}
+                                  className="p-1.5 rounded-full hover:bg-[#F6C1CC]/40 transition-all"
+                                  title="Copy number"
+                                >
+                                  {copiedKey === "seller_" + g.sellerId
+                                    ? <Check className="w-4 h-4 text-green-500" />
+                                    : <Copy className="w-4 h-4 text-[#7A6C9D]" />}
+                                </button>
+                              </div>
+                            ) : (
+                              <p className="text-red-400 text-xs italic">
+                                This seller doesn't accept {payType === "jazzcash" ? "JazzCash" : "EasyPaisa"}.
+                              </p>
+                            )}
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
 
-                  {/* Buyer's wallet for verification */}
-                  <div>
-                    <label className="block text-[#7A6C9D] text-xs mb-1">
-                      Your {payType === "jazzcash" ? "JazzCash" : "EasyPaisa"} number (so seller can verify) *
-                    </label>
-                    <input
-                      placeholder="e.g. 03001234567"
-                      value={buyerWalletPhone}
-                      onChange={(e) => { setBuyerWalletPhone(e.target.value); setPhoneError(validateMobilePhone(e.target.value)); }}
-                      className={inputStyle + (phoneError ? " border-red-400" : "")}
-                      disabled={hasUnavailableSeller}
-                    />
-                    {phoneError && <p className="text-red-500 text-xs mt-1">{phoneError}</p>}
-                  </div>
+                      <div>
+                        <label className="block text-[#7A6C9D] text-xs mb-1">
+                          Your {payType === "jazzcash" ? "JazzCash" : "EasyPaisa"} number (so seller can verify) *
+                        </label>
+                        <input
+                          placeholder="e.g. 03001234567"
+                          value={buyerWalletPhone}
+                          onChange={(e) => { setBuyerWalletPhone(e.target.value); setPhoneError(validateMobilePhone(e.target.value)); }}
+                          className={inputStyle + (phoneError ? " border-red-400" : "")}
+                          disabled={hasUnavailableSeller}
+                        />
+                        {phoneError && <p className="text-red-500 text-xs mt-1">{phoneError}</p>}
+                      </div>
 
-                  <div className="rounded-[12px] bg-amber-50 border border-amber-200 p-3">
-                    <p className="text-amber-700 text-xs">
-                      📋 Once seller(s) confirm receiving payment, your order will be marked "On Way."
-                    </p>
-                  </div>
+                      <div className="rounded-[12px] bg-amber-50 border border-amber-200 p-3">
+                        <p className="text-amber-700 text-xs">
+                          📋 Once seller(s) confirm receiving payment, your order will be marked "On Way."
+                        </p>
+                      </div>
 
-                  <div className="flex gap-3 pt-2">
-                    <button onClick={() => setStep("choose")} className="flex-1 py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A]">Back</button>
-                    <button
-                      onClick={handleWalletConfirm}
-                      disabled={hasUnavailableSeller}
-                      className="flex-1 py-3 rounded-full bg-[#FF8FA3] text-white disabled:opacity-50"
-                    >
-                      I've Paid — Confirm Order
-                    </button>
-                  </div>
+                      <div className="flex gap-3 pt-2">
+                        <button onClick={() => setStep("choose")} className="flex-1 py-3 rounded-full bg-[#C8B6E2] text-[#2E2A4A]">Back</button>
+                        <button
+                          onClick={handleWalletConfirm}
+                          disabled={hasUnavailableSeller}
+                          className="flex-1 py-3 rounded-full bg-[#FF8FA3] text-white disabled:opacity-50"
+                        >
+                          I've Paid — Confirm Order
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </motion.div>
@@ -474,12 +478,17 @@ export function Cart() {
     cart, selectedCart, removeFromCart, updateQuantity,
     checkout, stockError, clearStockError,
     toggleSelect, selectAll, clearSelection, isSelected,
+    cartLoading,
   } = useCart();
   const { products } = useProducts();
   const { placeOrder, getOrderByNumber } = useOrders();
   const { user, role, guestId, getUserById } = useAuth();
+  // FIX 6: pull in notifyOrderPlaced
+  const { notifyOrderPlaced } = useNotifications();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+
+  if (cartLoading) return null;
 
   const [orderPlaced, setOrderPlaced] = useState(false);
   const [confirmedOrder, setConfirmedOrder] = useState(null);
@@ -488,7 +497,33 @@ export function Cart() {
   const [deliveryDetails, setDeliveryDetails] = useState({ address: "", phone: "" });
   const [retryOrderNumber, setRetryOrderNumber] = useState(null);
 
-  // ─── RETRY FLOW: detect ?retry=ORDER_NUMBER URL param ──────
+  const [sellerProfiles, setSellerProfiles] = useState({});
+  const [loadingProfiles, setLoadingProfiles] = useState(false);
+
+  useEffect(() => {
+    if (!showPaymentModal) return;
+
+    const retryOrder = retryOrderNumber ? getOrderByNumber(retryOrderNumber) : null;
+    const itemsToCheck = retryOrder ? retryOrder.items : selectedCart;
+    const uniqueSellerIds = [...new Set(
+      itemsToCheck.map((i) => i.sellerId).filter(Boolean)
+    )];
+
+    if (uniqueSellerIds.length === 0) return;
+
+    setLoadingProfiles(true);
+    Promise.all(uniqueSellerIds.map((id) => getUserById(id)))
+      .then((results) => {
+        const map = {};
+        results.forEach((profile, idx) => {
+          if (profile) map[String(uniqueSellerIds[idx])] = profile;
+        });
+        setSellerProfiles(map);
+      })
+      .finally(() => setLoadingProfiles(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showPaymentModal]);
+
   useEffect(() => {
     const retryParam = searchParams.get("retry");
     if (!retryParam) return;
@@ -497,7 +532,6 @@ export function Cart() {
 
     setRetryOrderNumber(retryParam);
     setDeliveryDetails({ address: oldOrder.address, phone: oldOrder.buyerPhone });
-    // Jump straight to payment step — items + delivery already known
     setShowPaymentModal(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -512,19 +546,19 @@ export function Cart() {
     return live?.delivery || item.delivery || item.deliveryTime || "2–5 days";
   };
 
-  // For retry: use the original order's items. For new orders: use selectedCart
   const retryOrder = retryOrderNumber ? getOrderByNumber(retryOrderNumber) : null;
   const itemsForCheckout = retryOrder ? retryOrder.items : selectedCart;
 
-  const subtotal = itemsForCheckout.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const subtotal = itemsForCheckout.reduce(
+    (sum, item) => sum + item.price * item.quantity, 0
+  );
   const shipping = itemsForCheckout.length > 0 ? 150 : 0;
   const total = retryOrder ? retryOrder.total : subtotal + shipping;
 
-  const allSelected = cart.length > 0 && cart.every((item) => isSelected(item.id));
+  const allSelected =
+    cart.length > 0 && cart.every((item) => isSelected(item.id));
 
-  const handleProceedToCheckout = () => {
-    setShowDeliveryModal(true);
-  };
+  const handleProceedToCheckout = () => setShowDeliveryModal(true);
 
   const handleDeliveryContinue = (details) => {
     setDeliveryDetails(details);
@@ -532,7 +566,7 @@ export function Cart() {
     setShowPaymentModal(true);
   };
 
-  const handlePaymentSuccess = (paymentInfo) => {
+  const handlePaymentSuccess = async (paymentInfo) => {
     setShowPaymentModal(false);
     const { method, buyerWalletPhone, sellerWalletInfo } = paymentInfo;
 
@@ -543,7 +577,7 @@ export function Cart() {
 
     const buyerArg = user || { id: null, name: "Guest" };
 
-    const order = placeOrder(itemsForOrder, buyerArg, {
+    const order = await placeOrder(itemsForOrder, buyerArg, {
       address: deliveryDetails.address,
       phone: deliveryDetails.phone,
       paymentMethod: method,
@@ -556,7 +590,6 @@ export function Cart() {
       existingOrderNumber: retryOrderNumber || null,
     });
 
-    // For new orders only: clear from cart. Retries don't touch cart.
     if (!retryOrderNumber) {
       checkout(selectedCart);
     }
@@ -564,7 +597,17 @@ export function Cart() {
     setConfirmedOrder(order);
     setOrderPlaced(true);
 
-    // Clear retry param from URL
+    // ─── FIX 6: Notify buyer that their order is placed ───────
+    // Only for non-COD orders that are "waiting_confirmation" — COD
+    // goes straight to on_way so no confirmation wait is needed.
+    if (order && order.status === "waiting_confirmation") {
+      const buyerRecipient = order.buyerId || order.buyerGuestId ||
+        (!user ? guestId : null);
+      if (buyerRecipient) {
+        notifyOrderPlaced(buyerRecipient, order);
+      }
+    }
+
     if (retryOrderNumber) {
       searchParams.delete("retry");
       setSearchParams(searchParams);
@@ -589,7 +632,9 @@ export function Cart() {
     );
   }
 
-  const isWalletPayment = confirmedOrder?.paymentMethod === "JazzCash" || confirmedOrder?.paymentMethod === "EasyPaisa";
+  const isWalletPayment =
+    confirmedOrder?.paymentMethod === "JazzCash" ||
+    confirmedOrder?.paymentMethod === "EasyPaisa";
   const isWaitingConfirmation = confirmedOrder?.status === "waiting_confirmation";
 
   return (
@@ -607,16 +652,28 @@ export function Cart() {
 
       <PaymentModal
         isOpen={showPaymentModal}
-        onClose={() => { setShowPaymentModal(false); if (retryOrderNumber) { setRetryOrderNumber(null); searchParams.delete("retry"); setSearchParams(searchParams); } }}
+        onClose={() => {
+          setShowPaymentModal(false);
+          if (retryOrderNumber) {
+            setRetryOrderNumber(null);
+            searchParams.delete("retry");
+            setSearchParams(searchParams);
+          }
+        }}
         onSuccess={handlePaymentSuccess}
         total={total}
         items={itemsForCheckout}
-        getUserById={getUserById}
+        sellerProfiles={sellerProfiles}
+        loadingProfiles={loadingProfiles}
       />
 
       <div className="max-w-[1200px] mx-auto">
 
-        <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="text-center mb-12">
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="text-center mb-12"
+        >
           <h1 className="text-5xl lg:text-6xl mb-4">
             <span style={{ fontFamily: "Fredoka, sans-serif", color: "#F4F1F8", fontWeight: 500 }}>Your </span>
             <span style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3", textShadow: "0 0 35px rgba(255,143,163,0.7)" }}>Cart</span>
@@ -630,7 +687,10 @@ export function Cart() {
             className="rounded-[24px] bg-[#FFF6F8]/90 p-10 shadow-2xl text-center max-w-[700px] mx-auto"
           >
             <div className="text-7xl mb-6">{isWaitingConfirmation ? "⏳" : "✅"}</div>
-            <h2 style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3" }} className="text-4xl mb-2">
+            <h2
+              style={{ fontFamily: "Pacifico, cursive", color: "#FF8FA3" }}
+              className="text-4xl mb-2"
+            >
               {isWaitingConfirmation ? "Order Placed!" : "Order Confirmed!"}
             </h2>
             <p className="text-[#7A6C9D] mb-2">
@@ -641,48 +701,122 @@ export function Cart() {
 
             <div className="inline-block px-4 py-2 rounded-full bg-[#EDE8F9] mb-8 mt-2">
               <p className="text-[#4A3A7A] text-sm">
-                Order Number: <span className="font-bold tracking-wider">{confirmedOrder.orderNumber}</span>
+                Order Number:{" "}
+                <span className="font-bold tracking-wider">
+                  {confirmedOrder.orderNumber}
+                </span>
               </p>
             </div>
 
+            {/* ─── FIX 5: Product items with images + links ───── */}
             <div className="text-left bg-white/70 rounded-[16px] p-6 mb-6 space-y-3">
-              {confirmedOrder.items.map((item) => (
-                <div key={item.id} className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium text-[#2E2A4A]">{item.name} <span className="text-[#7A6C9D] text-sm">x{item.quantity}</span></p>
-                    <p className="text-xs text-[#C8B6E2]">🚚 Delivery: {item.delivery}</p>
-                  </div>
-                  <span className="text-[#FF8FA3] font-semibold">Rs. {(item.price * item.quantity).toFixed(2)}</span>
-                </div>
-              ))}
+              <p className="text-xs text-[#C8B6E2] uppercase tracking-wide mb-2">Items</p>
+
+              {confirmedOrder.items.map((item) => {
+                const fullProduct = products.find((p) => p.id === item.id);
+                const imageUrl =
+                  fullProduct?.image ||
+                  fullProduct?.images?.[0] ||
+                  item.image ||
+                  null;
+
+                return (
+                  <Link
+                    key={item.id}
+                    to={`/products/${item.id}`}
+                    className="flex items-center gap-3 p-2 rounded-[12px] hover:bg-[#F6C1CC]/20 transition-colors group"
+                  >
+                    {/* Product image */}
+                    <div className="w-14 h-14 rounded-[10px] overflow-hidden bg-gradient-to-br from-[#F6C1CC]/30 to-[#C8B6E2]/30 flex-shrink-0 border border-[#F6C1CC]/40">
+                      {imageUrl ? (
+                        <img
+                          src={imageUrl}
+                          alt={item.name}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-2xl">
+                          🧶
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[#2E2A4A] font-medium text-sm truncate group-hover:text-[#FF8FA3] transition-colors">
+                        {item.name}{" "}
+                        <span className="text-[#7A6C9D] font-normal">
+                          x{item.quantity}
+                        </span>
+                      </p>
+                      <p className="text-xs text-[#C8B6E2]">
+                        🚚 Delivery: {item.delivery}
+                      </p>
+                    </div>
+
+                    {/* Price */}
+                    <span className="text-[#FF8FA3] font-semibold text-sm flex-shrink-0">
+                      Rs. {(item.price * item.quantity).toFixed(2)}
+                    </span>
+                  </Link>
+                );
+              })}
 
               <hr className="border-[#F6C1CC] my-2" />
-
-              <div className="flex justify-between text-sm text-[#7A6C9D]"><span>Subtotal</span><span>Rs. {confirmedOrder.subtotal.toFixed(2)}</span></div>
-              <div className="flex justify-between text-sm text-[#7A6C9D]"><span>Shipping</span><span>Rs. {confirmedOrder.shipping.toFixed(2)}</span></div>
-              <div className="flex justify-between text-lg font-bold text-[#2E2A4A]"><span>Total</span><span>Rs. {confirmedOrder.total.toFixed(2)}</span></div>
-
+              <div className="flex justify-between text-sm text-[#7A6C9D]">
+                <span>Subtotal</span>
+                <span>Rs. {confirmedOrder.subtotal.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between text-sm text-[#7A6C9D]">
+                <span>Shipping</span>
+                <span>Rs. {confirmedOrder.shipping.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between text-lg font-bold text-[#2E2A4A]">
+                <span>Total</span>
+                <span>Rs. {confirmedOrder.total.toFixed(2)}</span>
+              </div>
               <hr className="border-[#F6C1CC] my-2" />
 
               <div>
-                <p className="text-xs text-[#C8B6E2] uppercase tracking-wide mb-1">Delivery To</p>
-                <p className="text-sm text-[#2E2A4A] whitespace-pre-line">{confirmedOrder.address}</p>
-                <p className="text-sm text-[#2E2A4A] mt-1">📞 {confirmedOrder.buyerPhone}</p>
+                <p className="text-xs text-[#C8B6E2] uppercase tracking-wide mb-1">
+                  Delivery To
+                </p>
+                <p className="text-sm text-[#2E2A4A] whitespace-pre-line">
+                  {confirmedOrder.address}
+                </p>
+                <p className="text-sm text-[#2E2A4A] mt-1">
+                  📞 {confirmedOrder.buyerPhone}
+                </p>
               </div>
 
               <div className="mt-3 px-4 py-2 rounded-[10px] bg-[#EDE8F9] text-[#4A3A7A] text-sm text-center">
-                Payment: <span className="font-medium">{confirmedOrder.paymentMethod}</span>
+                Payment:{" "}
+                <span className="font-medium">{confirmedOrder.paymentMethod}</span>
               </div>
 
-              {/* Wallet payment notice */}
               {isWalletPayment && (
                 <div className="px-4 py-3 rounded-[10px] bg-amber-50 border border-amber-200 text-amber-700 text-sm">
-                  ⏳ <strong>Payment verification underway.</strong> Once the seller confirms receiving your payment, your delivery will be on the way.
+                  ⏳{" "}
+                  <strong>Payment verification underway.</strong> Once the seller
+                  confirms receiving your payment, your delivery will be on the way.
                 </div>
               )}
+
+              {/* Track order link */}
+              <div className="text-center pt-2">
+                <Link
+                  to="/my-orders"
+                  className="text-[#FF8FA3] text-sm underline hover:opacity-80 transition-opacity"
+                >
+                  Track this order in My Orders →
+                </Link>
+              </div>
             </div>
 
-            <button onClick={handleContinueShopping} className="px-8 py-3 rounded-full bg-[#FF8FA3] text-white hover:scale-105 transition-all">
+            <button
+              onClick={handleContinueShopping}
+              className="px-8 py-3 rounded-full bg-[#FF8FA3] text-white hover:scale-105 transition-all"
+            >
               Continue Shopping
             </button>
           </motion.div>
@@ -699,12 +833,19 @@ export function Cart() {
             <div className="lg:col-span-2 space-y-4">
 
               <div className="flex items-center justify-between px-2 mb-1">
-                <button onClick={allSelected ? clearSelection : selectAll} className="flex items-center gap-2 text-[#C8B6E2] hover:text-[#FF8FA3] text-sm">
-                  {allSelected ? <CheckSquare className="w-5 h-5 text-[#FF8FA3]" /> : <Square className="w-5 h-5" />}
+                <button
+                  onClick={allSelected ? clearSelection : selectAll}
+                  className="flex items-center gap-2 text-[#C8B6E2] hover:text-[#FF8FA3] text-sm"
+                >
+                  {allSelected
+                    ? <CheckSquare className="w-5 h-5 text-[#FF8FA3]" />
+                    : <Square className="w-5 h-5" />}
                   {allSelected ? "Deselect All" : "Select All"}
                 </button>
                 {selectedCart.length > 0 && (
-                  <span className="text-xs text-[#C8B6E2]">{selectedCart.length} of {cart.length} selected</span>
+                  <span className="text-xs text-[#C8B6E2]">
+                    {selectedCart.length} of {cart.length} selected
+                  </span>
                 )}
               </div>
 
@@ -724,38 +865,83 @@ export function Cart() {
                   >
                     <div className="flex items-center gap-4">
                       <button onClick={() => toggleSelect(item.id)} className="flex-shrink-0 p-1">
-                        {selected ? <CheckSquare className="w-5 h-5 text-[#FF8FA3]" /> : <Square className="w-5 h-5 text-[#C8B6E2]" />}
+                        {selected
+                          ? <CheckSquare className="w-5 h-5 text-[#FF8FA3]" />
+                          : <Square className="w-5 h-5 text-[#C8B6E2]" />}
                       </button>
                       {item.image && (
-                        <img src={item.image} alt={item.name} onClick={() => navigate(`/products/${item.id}`)} className="w-16 h-16 object-cover rounded-[12px] flex-shrink-0 cursor-pointer hover:scale-105 transition-transform" />
+                        <img
+                          src={item.image}
+                          alt={item.name}
+                          onClick={() => navigate(`/products/${item.id}`)}
+                          className="w-16 h-16 object-cover rounded-[12px] flex-shrink-0 cursor-pointer hover:scale-105 transition-transform"
+                        />
                       )}
                       <div className="flex-1 min-w-0">
-                        <h3 onClick={() => navigate(`/products/${item.id}`)} className="text-[#2E2A4A] font-medium truncate cursor-pointer hover:text-[#FF8FA3]">{item.name}</h3>
+                        <h3
+                          onClick={() => navigate(`/products/${item.id}`)}
+                          className="text-[#2E2A4A] font-medium truncate cursor-pointer hover:text-[#FF8FA3]"
+                        >
+                          {item.name}
+                        </h3>
                         <p className="text-[#FF8FA3] font-semibold">Rs. {item.price}</p>
                         <p className="text-xs text-[#C8B6E2] mt-0.5">🚚 Delivery: {deliveryTime}</p>
-                        {isOutOfStock ? <p className="text-xs text-red-400 font-medium">⚠ Out of Stock</p>
-                          : liveStock < item.quantity ? <p className="text-xs text-amber-500 font-medium">⚠ Only {liveStock} left</p>
-                          : <p className="text-xs text-[#C8B6E2]">{liveStock} available</p>}
+                        {isOutOfStock
+                          ? <p className="text-xs text-red-400 font-medium">⚠ Out of Stock</p>
+                          : liveStock < item.quantity
+                            ? <p className="text-xs text-amber-500 font-medium">⚠ Only {liveStock} left</p>
+                            : <p className="text-xs text-[#C8B6E2]">{liveStock} available</p>}
                       </div>
                       <div className="flex items-center gap-2 flex-shrink-0">
-                        <button onClick={() => { if (item.quantity <= 1) removeFromCart(item.id); else updateQuantity(item.id, item.quantity - 1); }} className="w-8 h-8 rounded-full bg-[#F6C1CC]/40 flex items-center justify-center"><Minus className="w-4 h-4 text-[#7A6C9D]" /></button>
-                        <span className="w-6 text-center text-[#2E2A4A] font-medium">{item.quantity}</span>
-                        <button onClick={() => updateQuantity(item.id, item.quantity + 1)} disabled={item.quantity >= liveStock} className={`w-8 h-8 rounded-full flex items-center justify-center ${item.quantity >= liveStock ? "bg-gray-100 cursor-not-allowed" : "bg-[#F6C1CC]/40"}`}><Plus className={`w-4 h-4 ${item.quantity >= liveStock ? "text-gray-300" : "text-[#7A6C9D]"}`} /></button>
+                        <button
+                          onClick={() => {
+                            if (item.quantity <= 1) removeFromCart(item.id);
+                            else updateQuantity(item.id, item.quantity - 1);
+                          }}
+                          className="w-8 h-8 rounded-full bg-[#F6C1CC]/40 flex items-center justify-center"
+                        >
+                          <Minus className="w-4 h-4 text-[#7A6C9D]" />
+                        </button>
+                        <span className="w-6 text-center text-[#2E2A4A] font-medium">
+                          {item.quantity}
+                        </span>
+                        <button
+                          onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                          disabled={item.quantity >= liveStock}
+                          className={`w-8 h-8 rounded-full flex items-center justify-center ${item.quantity >= liveStock ? "bg-gray-100 cursor-not-allowed" : "bg-[#F6C1CC]/40"}`}
+                        >
+                          <Plus className={`w-4 h-4 ${item.quantity >= liveStock ? "text-gray-300" : "text-[#7A6C9D]"}`} />
+                        </button>
                       </div>
-                      <p className="text-[#FF8FA3] font-semibold flex-shrink-0">Rs. {(item.price * item.quantity).toFixed(2)}</p>
-                      <button onClick={() => removeFromCart(item.id)} className="p-2 rounded-full hover:bg-[#FF8FA3]/20"><Trash2 className="w-4 h-4 text-[#FF8FA3]" /></button>
+                      <p className="text-[#FF8FA3] font-semibold flex-shrink-0">
+                        Rs. {(item.price * item.quantity).toFixed(2)}
+                      </p>
+                      <button
+                        onClick={() => removeFromCart(item.id)}
+                        className="p-2 rounded-full hover:bg-[#FF8FA3]/20"
+                      >
+                        <Trash2 className="w-4 h-4 text-[#FF8FA3]" />
+                      </button>
                     </div>
                   </motion.div>
                 );
               })}
             </div>
 
+            {/* ORDER SUMMARY */}
             <div className="rounded-[24px] bg-[#FFF6F8]/90 p-8 shadow-xl h-fit">
-              <h2 style={{ fontFamily: "Fredoka, sans-serif" }} className="text-2xl text-[#2E2A4A] mb-6">Order Summary</h2>
+              <h2
+                style={{ fontFamily: "Fredoka, sans-serif" }}
+                className="text-2xl text-[#2E2A4A] mb-6"
+              >
+                Order Summary
+              </h2>
               {selectedCart.length === 0 ? (
                 <div className="text-center py-6">
                   <ShoppingBag className="w-10 h-10 text-[#C8B6E2] mx-auto mb-3" />
-                  <p className="text-[#C8B6E2] text-sm">Select items above to see your order summary.</p>
+                  <p className="text-[#C8B6E2] text-sm">
+                    Select items above to see your order summary.
+                  </p>
                 </div>
               ) : (
                 <>
@@ -763,21 +949,39 @@ export function Cart() {
                     {selectedCart.map((item) => (
                       <div key={item.id} className="text-sm text-[#7A6C9D]">
                         <div className="flex justify-between">
-                          <span className="truncate max-w-[160px]">{item.name} x{item.quantity}</span>
+                          <span className="truncate max-w-[160px]">
+                            {item.name} x{item.quantity}
+                          </span>
                           <span>Rs. {(item.price * item.quantity).toFixed(2)}</span>
                         </div>
-                        <p className="text-xs text-[#C8B6E2] ml-1">🚚 {getDeliveryTime(item)}</p>
+                        <p className="text-xs text-[#C8B6E2] ml-1">
+                          🚚 {getDeliveryTime(item)}
+                        </p>
                       </div>
                     ))}
                   </div>
                   <hr className="border-[#F6C1CC] mb-4" />
-                  <div className="flex justify-between text-sm text-[#7A6C9D] mb-2"><span>Subtotal</span><span>Rs. {subtotal.toFixed(2)}</span></div>
-                  <div className="flex justify-between text-sm text-[#7A6C9D] mb-4"><span>Shipping</span><span>Rs. {shipping.toFixed(2)}</span></div>
-                  <div className="flex justify-between text-lg font-bold text-[#2E2A4A] mb-6"><span>Total</span><span>Rs. {total.toFixed(2)}</span></div>
-                  <button onClick={handleProceedToCheckout} className="w-full py-4 rounded-full bg-[#FF8FA3] text-white hover:scale-[1.02] transition-all shadow-lg">
+                  <div className="flex justify-between text-sm text-[#7A6C9D] mb-2">
+                    <span>Subtotal</span>
+                    <span>Rs. {subtotal.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm text-[#7A6C9D] mb-4">
+                    <span>Shipping</span>
+                    <span>Rs. {shipping.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-lg font-bold text-[#2E2A4A] mb-6">
+                    <span>Total</span>
+                    <span>Rs. {total.toFixed(2)}</span>
+                  </div>
+                  <button
+                    onClick={handleProceedToCheckout}
+                    className="w-full py-4 rounded-full bg-[#FF8FA3] text-white hover:scale-[1.02] transition-all shadow-lg"
+                  >
                     Proceed to Checkout
                   </button>
-                  <p className="text-xs text-center mt-4 text-[#C8B6E2]">COD · Card · JazzCash · EasyPaisa</p>
+                  <p className="text-xs text-center mt-4 text-[#C8B6E2]">
+                    COD · Card · JazzCash · EasyPaisa
+                  </p>
                 </>
               )}
             </div>

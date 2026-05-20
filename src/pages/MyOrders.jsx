@@ -1,9 +1,10 @@
 import { motion } from "framer-motion";
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { Clock, Truck, CheckCircle, XCircle, AlertCircle, Package } from "lucide-react";
 import { useOrders } from "../context/OrderContext";
 import { useAuth } from "../context/AuthContext";
+import { useProducts } from "../context/ProductContext";
 
 const TABS = [
   { id: "waiting_confirmation", label: "Waiting for Confirmation", icon: Clock, color: "#FF8FA3" },
@@ -28,18 +29,18 @@ function formatTimestamp(ts) {
 export function MyOrders() {
   const { getOrdersForBuyer } = useOrders();
   const { user, guestId } = useAuth();
+  const { products } = useProducts();
   const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState("waiting_confirmation");
   const [, forceUpdate] = useState({});
 
-  // Tick the page every 10s so countdowns refresh
+  // Tick every 10s so countdowns refresh
   useEffect(() => {
     const interval = setInterval(() => forceUpdate({}), 10000);
     return () => clearInterval(interval);
   }, []);
 
-  // "retry_pending" orders show in Waiting bucket so user can find them
   const allOrders = getOrdersForBuyer(user?.id, !user ? guestId : null);
 
   const grouped = {
@@ -51,6 +52,7 @@ export function MyOrders() {
 
   const ordersForTab = grouped[activeTab] || [];
 
+  // ─── ORDER CARD ───────────────────────────────────────────────
   const OrderCard = ({ order }) => {
     const isRetryPending = order.status === "retry_pending";
     const isOnWay = order.status === "on_way";
@@ -64,6 +66,7 @@ export function MyOrders() {
         animate={{ opacity: 1, y: 0 }}
         className="rounded-[20px] bg-[#FFF6F8]/95 p-6 shadow-lg"
       >
+        {/* Order header */}
         <div className="flex items-start justify-between mb-3">
           <div>
             <p className="text-xs text-[#C8B6E2] uppercase tracking-wide">Order</p>
@@ -76,7 +79,7 @@ export function MyOrders() {
           </div>
         </div>
 
-        {/* Status pill */}
+        {/* Status banners */}
         {isRetryPending && (
           <div className="rounded-[12px] bg-amber-50 border border-amber-200 p-3 mb-3">
             <div className="flex items-start gap-2">
@@ -84,7 +87,7 @@ export function MyOrders() {
               <div className="flex-1">
                 <p className="text-amber-700 text-sm font-medium">Payment retry needed</p>
                 <p className="text-amber-600 text-xs mt-0.5">
-                  Seller didn't receive your payment. Please retry payment to keep this order alive.
+                  Seller didn't receive your payment. Please retry to keep this order alive.
                 </p>
                 <button
                   onClick={() => navigate("/cart?retry=" + order.orderNumber)}
@@ -127,22 +130,77 @@ export function MyOrders() {
           </div>
         )}
 
-        {/* Items */}
-        <div className="space-y-2">
-          {order.items.map((item) => (
-            <div key={item.id} className="flex items-center gap-3 text-sm">
-              {item.image && <img src={item.image} alt="" className="w-10 h-10 rounded-[8px] object-cover flex-shrink-0" />}
-              <div className="flex-1">
-                <p className="text-[#2E2A4A]">{item.name} <span className="text-[#7A6C9D] text-xs">x{item.quantity}</span></p>
-                <p className="text-xs text-[#C8B6E2]">🚚 {item.delivery}</p>
-              </div>
-              <p className="text-[#FF8FA3]">Rs. {(item.price * item.quantity).toFixed(2)}</p>
-            </div>
-          ))}
+        {/* ─── ITEMS WITH PRODUCT DETAILS + LINKS ────────────── */}
+        <div className="space-y-3 mb-4">
+          <p className="text-xs text-[#C8B6E2] uppercase tracking-wide">Items</p>
+          {order.items.map((item) => {
+            const fullProduct = products.find((p) => p.id === item.id);
+            const imageUrl = fullProduct?.image || fullProduct?.images?.[0] || item.image || null;
+
+            return (
+              // ✅ Fixed: /products/ (with s) to match app routes
+              <Link
+                key={item.id}
+                to={`/products/${item.id}`}
+                className="flex items-center gap-3 p-2 rounded-[12px] hover:bg-[#F6C1CC]/20 transition-colors group"
+              >
+                {/* Product image */}
+                <div className="w-14 h-14 rounded-[10px] overflow-hidden bg-gradient-to-br from-[#F6C1CC]/30 to-[#C8B6E2]/30 flex-shrink-0 border border-[#F6C1CC]/40">
+                  {imageUrl ? (
+                    <img
+                      src={imageUrl}
+                      alt={item.name}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-2xl">🧶</div>
+                  )}
+                </div>
+
+                {/* Product info */}
+                <div className="flex-1 min-w-0">
+                  <p className="text-[#2E2A4A] font-medium text-sm truncate group-hover:text-[#FF8FA3] transition-colors">
+                    {item.name}
+                  </p>
+                  <p className="text-xs text-[#7A6C9D]">
+                    Qty: {item.quantity} · Rs. {(item.price * item.quantity).toFixed(2)}
+                  </p>
+                  {item.delivery && (
+                    <p className="text-xs text-[#C8B6E2]">🚚 {item.delivery}</p>
+                  )}
+                </div>
+
+                {/* Price */}
+                <p className="text-[#FF8FA3] font-semibold text-sm flex-shrink-0">
+                  Rs. {(item.price * item.quantity).toFixed(2)}
+                </p>
+              </Link>
+            );
+          })}
         </div>
 
-        {/* Delivery address (collapsed style) */}
-        <div className="mt-3 pt-3 border-t border-[#F6C1CC]/60">
+        {/* Order totals */}
+        <div className="border-t border-[#F6C1CC]/60 pt-3 mb-3 space-y-1">
+          {order.subtotal > 0 && (
+            <div className="flex justify-between text-xs text-[#7A6C9D]">
+              <span>Subtotal</span>
+              <span>Rs. {order.subtotal.toFixed(2)}</span>
+            </div>
+          )}
+          {order.shipping > 0 && (
+            <div className="flex justify-between text-xs text-[#7A6C9D]">
+              <span>Shipping</span>
+              <span>Rs. {order.shipping.toFixed(2)}</span>
+            </div>
+          )}
+          <div className="flex justify-between text-sm font-semibold text-[#2E2A4A]">
+            <span>Total</span>
+            <span className="text-[#FF8FA3]">Rs. {order.total.toFixed(2)}</span>
+          </div>
+        </div>
+
+        {/* Delivery address */}
+        <div className="pt-3 border-t border-[#F6C1CC]/60">
           <p className="text-xs text-[#C8B6E2] uppercase tracking-wide mb-1">Delivering to</p>
           <p className="text-xs text-[#2E2A4A] whitespace-pre-line">{order.address}</p>
           <p className="text-xs text-[#2E2A4A] mt-1">📞 {order.buyerPhone}</p>

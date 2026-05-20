@@ -1,16 +1,18 @@
 import { createContext, useContext, useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 
 const AuthContext = createContext();
 
-const ADMIN_EMAIL = "admin@loomslilly.com";
-const ADMIN_PASSWORD = "Admin@123";
-
-// Generate or reuse a stable guest ID per browser (for tracking guest orders)
+// ─── GUEST ID ─────────────────────────────────────────────────
+// Kept exactly as before — guest orders still work the same way
 function getOrCreateGuestId() {
   try {
     let id = localStorage.getItem("loomslilly_guestId");
     if (!id) {
-      id = "guest_" + Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+      id =
+        "guest_" +
+        Math.random().toString(36).substring(2, 10) +
+        Date.now().toString(36);
       localStorage.setItem("loomslilly_guestId", id);
     }
     return id;
@@ -20,174 +22,256 @@ function getOrCreateGuestId() {
 }
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(null);       // combined auth + profile object
+  const [loading, setLoading] = useState(true);
   const guestId = getOrCreateGuestId();
 
+  // ─── LISTEN FOR AUTH STATE CHANGES ──────────────────────────
   useEffect(() => {
-    const savedUser = localStorage.getItem("currentUser");
-    if (savedUser) setUser(JSON.parse(savedUser));
+    // Get initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        fetchAndSetUser(session.user);
+      } else {
+        setLoading(false);
+      }
+    });
+
+    // Listen for login / logout / token refresh
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        fetchAndSetUser(session.user);
+      } else {
+        setUser(null);
+        setLoading(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  useEffect(() => {
-    if (user) localStorage.setItem("currentUser", JSON.stringify(user));
-    else localStorage.removeItem("currentUser");
-  }, [user]);
+  // Fetch profile row and merge with auth user into one object
+  // so the rest of the app can keep using user.name, user.role, etc.
+  const fetchAndSetUser = async (authUser) => {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", authUser.id)
+      .single();
 
-  const getRegisteredUsers = () =>
-    JSON.parse(localStorage.getItem("registeredUsers") || "[]");
-
-  const saveRegisteredUsers = (users) =>
-    localStorage.setItem("registeredUsers", JSON.stringify(users));
-
-  const preRegister = (userData) => {
-    const users = getRegisteredUsers();
-    if (users.some((u) => u.email === userData.email)) {
-      return { success: false, message: "Email already registered" };
+    if (profile) {
+      setUser({
+        // Auth fields
+        id: authUser.id,
+        email: authUser.email,
+        emailVerified: authUser.email_confirmed_at ? true : false,
+        // Profile fields — same names the rest of the app already uses
+        name: profile.name,
+        role: profile.role,
+        phone: profile.phone ?? "",
+        contactEmail: profile.contact_email ?? "",
+        jazzcashPhone: profile.jazzcash_phone ?? "",
+        easypaisaPhone: profile.easypaisa_phone ?? "",
+        isCommunityMember: profile.is_community_member ?? false,
+        banned: profile.banned ?? false,
+        isAdmin: profile.role === "admin",
+        avatarUrl: profile.avatar_url ?? null,
+      });
     }
-    return { success: true, pending: userData };
+    setLoading(false);
   };
 
-  const register = (userData) => {
-    const users = getRegisteredUsers();
-
-    if (users.some((u) => u.email === userData.email)) {
-      return { success: false, message: "Email already registered" };
-    }
-
-    const newUser = {
-      ...userData,
-      id: userData.id || Date.now(),
-      password: userData.password || "",
-      phone: userData.phone || "",
-      contactEmail: userData.contactEmail || "",
-      jazzcashPhone: userData.jazzcashPhone || "",
-      easypaisaPhone: userData.easypaisaPhone || "",
-      isCommunityMember: false,
-      role: userData.role || "buyer",
-      banned: false,
-      emailVerified: userData.emailVerified ?? false,
-    };
-
-    users.push(newUser);
-    saveRegisteredUsers(users);
-    setUser(newUser);
-
-    return { success: true, user: newUser };
-  };
-
-  const login = (credentials) => {
-    if (
-      credentials.email === ADMIN_EMAIL &&
-      credentials.password === ADMIN_PASSWORD
-    ) {
-      const adminUser = {
-        id: "admin",
-        name: "Admin",
-        email: ADMIN_EMAIL,
-        role: "admin",
-        isAdmin: true,
-        emailVerified: true,
-      };
-      setUser(adminUser);
-      return { success: true, user: adminUser };
-    }
-
-    const users = getRegisteredUsers();
-    const found = users.find((u) => u.email === credentials.email);
-
-    if (!found) return { success: false, message: "Email not registered" };
-    if (found.password !== credentials.password)
-      return { success: false, message: "Incorrect password" };
-    if (found.banned)
-      return { success: false, message: "This account has been banned." };
-
-    const verified = found.emailVerified === undefined ? true : found.emailVerified;
-    if (!verified) {
-      return {
-        success: false,
-        message: "Please verify your email before logging in.",
-        needsVerification: true,
-      };
-    }
-
-    setUser(found);
-    return { success: true, user: found };
-  };
-
-  const logout = () => setUser(null);
-
-  const updateUser = (data) => {
-    setUser((prev) => {
-      if (!prev) return prev;
-
-      const updated = {
-        ...prev,
-        ...data,
-        password: data.password ?? prev.password,
-        phone: data.phone !== undefined ? data.phone : prev.phone ?? "",
-        contactEmail:
-          data.contactEmail !== undefined
-            ? data.contactEmail
-            : prev.contactEmail ?? "",
-        jazzcashPhone:
-          data.jazzcashPhone !== undefined
-            ? data.jazzcashPhone
-            : prev.jazzcashPhone ?? "",
-        easypaisaPhone:
-          data.easypaisaPhone !== undefined
-            ? data.easypaisaPhone
-            : prev.easypaisaPhone ?? "",
-        isCommunityMember:
-          data.isCommunityMember !== undefined
-            ? data.isCommunityMember
-            : prev.isCommunityMember ?? false,
-        emailVerified:
-          data.emailVerified !== undefined
-            ? data.emailVerified
-            : prev.emailVerified ?? false,
-      };
-
-      const users = getRegisteredUsers();
-      const idx = users.findIndex((u) => u.id === prev.id);
-      if (idx !== -1) {
-        users[idx] = updated;
-      } else {
-        users.push(updated);
-      }
-      saveRegisteredUsers(users);
-
-      return updated;
+  // ─── REGISTER ───────────────────────────────────────────────
+  // Supabase sends the real verification email automatically.
+  // No more fake codes or demo mode.
+  const register = async ({
+    name,
+    email,
+    password,
+    role,
+    phone,
+    contactEmail,
+    jazzcashPhone,
+    easypaisaPhone,
+  }) => {
+    // 1. Create auth account — triggers real verification email
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: window.location.origin,
+      },
     });
+
+    if (error) return { success: false, message: error.message };
+
+    // 2. Insert profile row with all extra fields
+    const { error: profileError } = await supabase.from("profiles").insert({
+      id: data.user.id,
+      name,
+      role: role || "buyer",
+      phone: phone || "",
+      contact_email: contactEmail || "",
+      jazzcash_phone: jazzcashPhone || "",
+      easypaisa_phone: easypaisaPhone || "",
+      is_community_member: false,
+      banned: false,
+    });
+
+    if (profileError) return { success: false, message: profileError.message };
+
+    return { success: true };
   };
 
-  const banUser = (userId) => {
-    const users = getRegisteredUsers();
-    const updated = users.map((u) =>
-      u.id === userId ? { ...u, banned: true } : u
-    );
-    saveRegisteredUsers(updated);
+  // ─── PRE-REGISTER ───────────────────────────────────────────
+  // Check if email already exists before showing the verify screen.
+  // Supabase does not expose a direct "email exists" check on the
+  // client, so we query profiles instead.
+  const preRegister = async ({ email }) => {
+    const { data } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("contact_email", email)
+      .maybeSingle();
+
+    // Also check auth emails via a lightweight sign-in attempt
+    // (Supabase returns a specific error when email is not registered)
+    // Simplest approach: just let signUp handle it and return its error.
+    // preRegister is now only used to give an early duplicate warning.
+    if (data) return { success: false, message: "Email already registered" };
+    return { success: true };
   };
 
-  const unbanUser = (userId) => {
-    const users = getRegisteredUsers();
-    const updated = users.map((u) =>
-      u.id === userId ? { ...u, banned: false } : u
-    );
-    saveRegisteredUsers(updated);
+  // ─── LOGIN ──────────────────────────────────────────────────
+  const login = async ({ email, password }) => {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      // Map Supabase error messages to your existing friendly messages
+      if (error.message.includes("Invalid login credentials"))
+        return { success: false, message: "Incorrect email or password." };
+      if (error.message.includes("Email not confirmed"))
+        return {
+          success: false,
+          message: "Please verify your email before logging in.",
+          needsVerification: true,
+        };
+      return { success: false, message: error.message };
+    }
+
+    // Check if banned — profile is loaded by onAuthStateChange,
+    // but we need the banned flag right now for immediate feedback
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("banned")
+      .eq("id", data.user.id)
+      .single();
+
+    if (profile?.banned) {
+      await supabase.auth.signOut();
+      return { success: false, message: "This account has been banned." };
+    }
+
+    return { success: true };
   };
 
-  const getAllUsers = () => getRegisteredUsers();
+  // ─── LOGOUT ─────────────────────────────────────────────────
+  const logout = async () => {
+    await supabase.auth.signOut();
+  };
 
-  // Used to look up a seller's wallet info during checkout
-  const getUserById = (userId) => {
+  // ─── UPDATE USER ────────────────────────────────────────────
+  // Called from Account.jsx — same fields as before
+  const updateUser = async (data) => {
+    if (!user) return;
+
+    // AFTER:
+const updates = {};
+if (data.name !== undefined) updates.name = data.name;
+if (data.role !== undefined) updates.role = data.role;
+if (data.phone !== undefined) updates.phone = data.phone;
+if (data.contactEmail !== undefined) updates.contact_email = data.contactEmail;
+if (data.jazzcashPhone !== undefined) updates.jazzcash_phone = data.jazzcashPhone;
+if (data.easypaisaPhone !== undefined) updates.easypaisa_phone = data.easypaisaPhone;
+if (data.isCommunityMember !== undefined)
+  updates.is_community_member = data.isCommunityMember;
+if (data.avatarUrl !== undefined) updates.avatar_url = data.avatarUrl;
+
+    const { error } = await supabase
+      .from("profiles")
+      .update(updates)
+      .eq("id", user.id);
+
+    if (!error) {
+      // Keep local state in sync immediately
+      setUser((prev) => ({ ...prev, ...data }));
+    }
+  };
+
+  // ─── BAN / UNBAN ────────────────────────────────────────────
+  // Admin only — updates the profiles table
+  const banUser = async (userId) => {
+    await supabase.from("profiles").update({ banned: true }).eq("id", userId);
+  };
+
+  const unbanUser = async (userId) => {
+    await supabase.from("profiles").update({ banned: false }).eq("id", userId);
+  };
+
+  // ─── GET ALL USERS ──────────────────────────────────────────
+  // Used by AdminContext
+  const getAllUsers = async () => {
+    const { data } = await supabase.from("profiles").select("*");
+    // Return in the same shape the rest of the app expects
+    return (data || []).map((p) => ({
+      id: p.id,
+      name: p.name,
+      email: p.email ?? "",
+      role: p.role,
+      phone: p.phone ?? "",
+      contactEmail: p.contact_email ?? "",
+      jazzcashPhone: p.jazzcash_phone ?? "",
+      easypaisaPhone: p.easypaisa_phone ?? "",
+      isCommunityMember: p.is_community_member ?? false,
+      banned: p.banned ?? false,
+    }));
+  };
+
+  // ─── GET USER BY ID ─────────────────────────────────────────
+  // Used by Cart.jsx PaymentModal to look up seller wallet numbers
+  const getUserById = async (userId) => {
     if (!userId) return null;
-    const users = getRegisteredUsers();
-    return users.find((u) => u.id === userId) || null;
+    const { data } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", userId)
+      .single();
+    if (!data) return null;
+    return {
+      id: data.id,
+      name: data.name,
+      email: data.email ?? "",
+      role: data.role,
+      phone: data.phone ?? "",
+      contactEmail: data.contact_email ?? "",
+      jazzcashPhone: data.jazzcash_phone ?? "",
+      easypaisaPhone: data.easypaisa_phone ?? "",
+      isCommunityMember: data.is_community_member ?? false,
+      banned: data.banned ?? false,
+    };
   };
 
+  // ─── COMMUNITY HELPERS ───────────────────────────────────────
   const joinCommunityMembership = () => updateUser({ isCommunityMember: true });
   const leaveCommunityMembership = () => updateUser({ isCommunityMember: false });
 
+  // ─── VALIDATION HELPERS ──────────────────────────────────────
+  // Kept identical — SignUp.jsx uses these directly
   const validateEmail = (email) => /\S+@\S+\.\S+/.test(email);
 
   const validatePassword = (password) => {
@@ -197,6 +281,7 @@ export function AuthProvider({ children }) {
     return hasCapital && hasSymbol && numbers.length >= 2;
   };
 
+  // ─── DERIVED ROLE FLAGS ──────────────────────────────────────
   const role = user?.role || "guest";
   const isGuest = !user;
   const isAdmin = role === "admin";
@@ -206,13 +291,16 @@ export function AuthProvider({ children }) {
 
   const hasAccess = (type) => {
     switch (type) {
-      case "buyer": return isBuyer;
+      case "buyer":  return isBuyer;
       case "seller": return isSeller;
-      case "admin": return isAdmin;
-      case "auth": return !isGuest;
-      default: return false;
+      case "admin":  return isAdmin;
+      case "auth":   return !isGuest;
+      default:       return false;
     }
   };
+
+  // Don't render children until we know the auth state
+  if (loading) return null;
 
   return (
     <AuthContext.Provider

@@ -7,26 +7,31 @@ const today = new Date().toISOString().split("T")[0];
 
 export function Wishlist() {
   const { user, isGuest } = useAuth();
-  const { products, deals, isLikedByUser, isDealLikedByUser } = useProducts();
+  const { products, deals, isLikedByUser, isDealLikedByUser, likesLoading, productsLoading } = useProducts();
   const navigate = useNavigate();
 
+  // AFTER:
   if (isGuest) {
     return (
       <div className="min-h-screen flex items-center justify-center text-center">
-        <div>
-          <div className="text-7xl mb-6">🔒</div>
-          <p className="text-[#FFF6F8] text-2xl mb-6">Sign in to view your wishlist</p>
-          <button
-            onClick={() => navigate("/signup")}
-            className="px-8 py-3 rounded-full bg-[#FF8FA3] text-white hover:scale-105 transition-all"
-          >
-            Sign Up
-          </button>
-        </div>
+        ...
       </div>
     );
   }
 
+  if (likesLoading || productsLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p className="text-[#C8B6E2] text-lg">Loading your wishlist...</p>
+      </div>
+    );
+  }
+  console.log("wishlist state:", {
+  likesLoading,
+  productsLoading,
+  productsCount: products.length,
+  likedCheck: products.map(p => ({ id: p.id, liked: isLikedByUser(p.id, user?.id) }))
+});
   // Liked products — exclude products the user uploaded themselves
   const likedProducts = products.filter(
     (p) => isLikedByUser(p.id, user?.id) && p.sellerId !== user?.id

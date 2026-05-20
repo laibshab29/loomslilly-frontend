@@ -3,12 +3,14 @@ import { useSellers } from "../context/SellerContext";
 import { useParams } from "react-router-dom";
 import { useProducts } from "../context/ProductContext";
 import { useOrders } from "../context/OrderContext";
+import { useAuth } from "../context/AuthContext";
 import { ProductCard } from "../components/ProductCard";
 import { motion } from "framer-motion";
-import { User, Tag, TrendingUp } from "lucide-react";
+import { User, Tag, TrendingUp, Smartphone } from "lucide-react";
 import { Link } from "react-router-dom";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { SortBar, sortProducts } from "../components/SortBar";
+import { supabase } from "../lib/supabase";
 
 export function SellerProfile() {
   const { id } = useParams();
@@ -18,8 +20,45 @@ export function SellerProfile() {
 
   const [sort, setSort] = useState("recent");
 
-  const sellerId = Number(id);
-  const seller = getSellerById(sellerId);
+  // ─── FETCH SELLER PROFILE DIRECTLY FROM DB ───────────────────
+  // SellerContext may not have the full profile loaded yet, so we
+  // also fetch directly from profiles table to guarantee name +
+  // wallet numbers are always available.
+  const [sellerProfile, setSellerProfile] = useState(null);
+
+  useEffect(() => {
+    if (!id) return;
+    supabase
+      .from("profiles")
+      .select("id, name, role, jazzcash_phone, easypaisa_phone, avatar_url")
+      .eq("id", id)
+      .single()
+      .then(({ data }) => {
+        if (data) setSellerProfile(data);
+      });
+  }, [id]);
+
+  // sellerId is a UUID string (Supabase auth UUID), not a number
+  const sellerId = id;
+
+  // Merge SellerContext data with direct profile fetch
+  const sellerFromContext = getSellerById(sellerId);
+  const seller = sellerProfile
+    ? {
+        id: sellerProfile.id,
+        name: sellerProfile.name || sellerFromContext?.name || "Seller",
+        image: sellerProfile.avatar_url || sellerFromContext?.image || null,
+        jazzcashPhone: sellerProfile.jazzcash_phone || "",
+        easypaisaPhone: sellerProfile.easypaisa_phone || "",
+      }
+    : sellerFromContext
+    ? {
+        ...sellerFromContext,
+        jazzcashPhone: sellerFromContext.jazzcashPhone || "",
+        easypaisaPhone: sellerFromContext.easypaisaPhone || "",
+      }
+    : null;
+
   const sellerProducts = products.filter((p) => p.sellerId === sellerId);
   const sellerDeals = getDealsForSeller(sellerId);
 
@@ -39,7 +78,7 @@ export function SellerProfile() {
     .sort((a, b) => b.soldCount - a.soldCount)
     .slice(0, 10);
 
-  // ─── GROUP PRODUCTS BY CATEGORY → SUBCATEGORY (sorted) ───────
+  // ─── GROUP PRODUCTS BY CATEGORY → SUBCATEGORY ────────────────
   const productsByCategory = useMemo(() => {
     const sorted = sortProducts(sellerProducts, sort);
     return sorted.reduce((acc, product) => {
@@ -52,6 +91,18 @@ export function SellerProfile() {
     }, {});
   }, [sellerProducts, sort]);
 
+  // Show loading state while profile is being fetched
+  if (!seller && !sellerProfile) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-center">
+        <div>
+          <div className="text-6xl mb-4">⏳</div>
+          <p className="text-[#FFF6F8] text-2xl">Loading seller profile...</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!seller) {
     return (
       <div className="min-h-screen flex items-center justify-center text-center">
@@ -62,6 +113,8 @@ export function SellerProfile() {
       </div>
     );
   }
+
+  const hasWalletInfo = seller.jazzcashPhone || seller.easypaisaPhone;
 
   return (
     <div className="min-h-screen py-12 px-4 lg:px-20">
@@ -91,13 +144,33 @@ export function SellerProfile() {
             }}
             className="text-5xl mb-2"
           >
-            {seller.name || "Seller"}
+            {seller.name}
           </h1>
 
           <p className="text-[#FFF6F8]/70 text-sm">
             {sellerProducts.length} {sellerProducts.length === 1 ? "product" : "products"}
             {sellerDeals.length > 0 && " · " + sellerDeals.length + " active " + (sellerDeals.length === 1 ? "deal" : "deals")}
           </p>
+
+          {/* ─── WALLET INFO ─────────────────────────────────── */}
+          {hasWalletInfo && (
+            <div className="mt-4 inline-flex flex-col items-center gap-2">
+              {seller.jazzcashPhone && (
+                <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-[#FFF6F8]/15 border border-[#FFF6F8]/20 text-[#FFF6F8] text-sm">
+                  <Smartphone className="w-4 h-4 text-[#FF8FA3]" />
+                  <span className="text-[#C8B6E2] text-xs">JazzCash:</span>
+                  <span>{seller.jazzcashPhone}</span>
+                </div>
+              )}
+              {seller.easypaisaPhone && (
+                <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-[#FFF6F8]/15 border border-[#FFF6F8]/20 text-[#FFF6F8] text-sm">
+                  <Smartphone className="w-4 h-4 text-[#FF8FA3]" />
+                  <span className="text-[#C8B6E2] text-xs">EasyPaisa:</span>
+                  <span>{seller.easypaisaPhone}</span>
+                </div>
+              )}
+            </div>
+          )}
         </motion.div>
 
         {/* DEALS SECTION */}
@@ -175,7 +248,6 @@ export function SellerProfile() {
           </p>
         ) : (
           <>
-            {/* SORT BAR — above the category grid */}
             <div className="mb-2">
               <h2
                 className="text-3xl text-[#FFF6F8] mb-4"
@@ -219,7 +291,6 @@ export function SellerProfile() {
             ))}
           </>
         )}
-
       </div>
     </div>
   );
