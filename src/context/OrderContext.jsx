@@ -265,50 +265,62 @@ export function OrderProvider({ children }) {
 
   // ─── APPROVE PAYMENT (seller says yes) ───────────────────────
   // Fresh-read guard so a stale local snapshot can't resurrect a cancelled order.
-  const approvePayment = async (orderNumber) => {
-    const order = orders.find((o) => o.orderNumber === orderNumber);
-    if (!order) return;
-    if (order.status !== "waiting_confirmation") return;
+ const approvePayment = async (orderNumber) => {
+  const order = orders.find((o) => o.orderNumber === orderNumber);
+  if (!order) return;
+  if (order.status !== "waiting_confirmation") return;
 
-    const { data: fresh, error: fetchErr } = await supabase
-      .from("orders")
-      .select("status")
-      .eq("order_number", orderNumber)
-      .single();
+  const { data: fresh, error: fetchErr } = await supabase
+    .from("orders")
+    .select("status")
+    .eq("order_number", orderNumber)
+    .single();
+    console.log("fresh status:", fresh?.status, "fetchErr:", fetchErr);
 
-    if (fetchErr) { console.error("approvePayment fetch error:", fetchErr.message); return; }
-    if (fresh.status !== "waiting_confirmation") {
-      await fetchOrders();
-      return;
-    }
-
-    const now = new Date().toISOString();
-    const expectedDeliveryAt = new Date(
-      Date.now() + getMaxDeliveryMinutes(order.items) * 60 * 1000
-    ).toISOString();
-
-    const { error } = await supabase
-      .from("orders")
-      .update({
-        status:               "on_way",
-        confirmed_at:         now,
-        reviewed_at:          now,
-        expected_delivery_at: expectedDeliveryAt,
-      })
-      .eq("order_number", orderNumber);
-
-    if (error) { console.error("approvePayment error:", error.message); return; }
-
-    const sellerIdsForOrder = [...new Set(order.items.map((i) => i.sellerId).filter(Boolean))];
-    await Promise.all(sellerIdsForOrder.map((sid) =>
-      clearPaymentReviewNotification(orderNumber, sid)
-    ));
-
+  if (fetchErr) { console.error("approvePayment fetch error:", fetchErr.message); return; }
+  if (fresh.status !== "waiting_confirmation") {
     await fetchOrders();
+    return;
+  }
 
-    const buyerRecipient = order.buyerId || order.buyerGuestId;
-    if (buyerRecipient) handlersRef.current.notifyPaymentConfirmed(buyerRecipient, order);
-  };
+  // ── Fetch fresh items so delivery field is accurate ──
+  const { data: freshItems } = await supabase
+    .from("order_items")
+    .select("delivery")
+    .eq("order_id", order.id);
+
+  const itemsForDelivery = freshItems?.length ? freshItems : order.items;
+  const deliveryMs = getMaxDeliveryMinutes(itemsForDelivery) * 60 * 1000;
+console.log("freshItems:", freshItems);
+console.log("itemsForDelivery:", itemsForDelivery);
+console.log("deliveryMs:", deliveryMs);
+console.log("expectedDeliveryAt:", new Date(Date.now() + deliveryMs).toISOString());
+  const expectedDeliveryAt = new Date(Date.now() + deliveryMs).toISOString();
+
+  const { error } = await supabase
+    .from("orders")
+    .update({
+      status:               "on_way",
+      confirmed_at:         now,
+      reviewed_at:          now,
+      expected_delivery_at: expectedDeliveryAt,
+    })
+    .eq("order_number", orderNumber);
+    console.log("approvePayment update error:", error);
+if (error) { console.error("approvePayment error:", error.message); return; }
+
+  if (error) { console.error("approvePayment error:", error.message); return; }
+
+  const sellerIdsForOrder = [...new Set(order.items.map((i) => i.sellerId).filter(Boolean))];
+  await Promise.all(sellerIdsForOrder.map((sid) =>
+    clearPaymentReviewNotification(orderNumber, sid)
+  ));
+
+  await fetchOrders();
+
+  const buyerRecipient = order.buyerId || order.buyerGuestId;
+  if (buyerRecipient) handlersRef.current.notifyPaymentConfirmed(buyerRecipient, order);
+};
 
   // ─── REJECT PAYMENT (seller says no) ─────────────────────────
   const rejectPayment = async (orderNumber, reason = "Payment proof rejected by seller") => {
@@ -364,6 +376,7 @@ export function OrderProvider({ children }) {
       .from("orders")
       .update({ status: "cancelled", cancel_reason: reason })
       .eq("order_number", orderNumber);
+      console.log("cancelOrder update error:", error);
 
     if (error) { console.error("cancelOrder error:", error.message); return false; }
 

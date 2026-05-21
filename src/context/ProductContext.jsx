@@ -48,50 +48,62 @@ export function ProductProvider({ children }) {
     setProducts(normalized);
   }, []);
 
-  // ─── FETCH DEALS ──────────────────────────────────────────────
   const fetchDeals = useCallback(async () => {
-    const { data, error } = await supabase
-      .from("deals")
-      .select(`
-        *,
-        deal_products ( product_id ),
-        deal_images ( url )
-      `)
-      .order("created_at", { ascending: false });
+  const { data, error } = await supabase
+    .from("deals")
+    .select(`
+      *,
+      deal_products ( product_id ),
+      deal_images ( url )
+    `)
+    .order("created_at", { ascending: false });
 
-    if (error) {
-      console.error("fetchDeals error:", error.message);
-      return;
-    }
+  if (error) {
+    console.error("fetchDeals error:", error.message);
+    return;
+  }
 
-    const allProductIds = (data || []).flatMap((d) =>
-      (d.deal_products || []).map((dp) => dp.product_id)
-    );
+  const allProductIds = (data || []).flatMap((d) =>
+    (d.deal_products || []).map((dp) => dp.product_id)
+  );
 
-    let productMap = {};
-    if (allProductIds.length > 0) {
-      const { data: dealProds } = await supabase
-        .from("products")
-        .select("id, name, category, type, price")
-        .in("id", allProductIds);
-      (dealProds || []).forEach((p) => { productMap[p.id] = p; });
-    }
+  let productMap = {};
+  if (allProductIds.length > 0) {
+    const { data: dealProds } = await supabase
+  .from("products")
+  .select(`
+    id, name, category, type, price, stock, details, delivery, badge, seller_id,
+    product_images ( url, position )
+  `)
+  .in("id", allProductIds);
 
-    const normalized = (data || []).map((d) => ({
-      id: d.id,
-      title: d.title,
-      sellerId: d.seller_id,
-      originalPrice: d.original_price,
-      discountedPrice: d.discounted_price,
-      validDate: d.valid_date,
-      images: (d.deal_images || []).map((img) => img.url),
-      products: (d.deal_products || [])
-        .map((dp) => productMap[dp.product_id])
-        .filter(Boolean),
-    }));
+(dealProds || []).forEach((p) => {
+  const sorted = (p.product_images || []).sort((a, b) => a.position - b.position);
+  const urls = sorted.map((img) => img.url);
+  productMap[p.id] = {
+    ...p,
+    sellerId: p.seller_id,
+    images: urls,
+    image: urls[0] ?? null,
+  };
+});
+  }
 
-    setDeals(normalized);
-  }, []);
+  const normalized = (data || []).map((d) => ({
+    id: d.id,
+    title: d.title,
+    sellerId: d.seller_id,
+    originalPrice: d.original_price,
+    discountedPrice: d.discounted_price,
+    validDate: d.valid_date,
+    images: (d.deal_images || []).map((img) => img.url),
+    products: (d.deal_products || [])
+      .map((dp) => productMap[dp.product_id])
+      .filter(Boolean),
+  }));
+
+  setDeals(normalized);
+}, []);
 
   // ─── FETCH LIKES FOR CURRENT USER ────────────────────────────
   const fetchLikes = useCallback(async (userId) => {
@@ -377,6 +389,7 @@ useEffect(() => {
       })
       .select()
       .single();
+      console.log("createDeal result:", newDeal, "error:", error); // ← add this line
 
     if (error) {
       console.error("createDeal error:", error.message);

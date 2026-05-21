@@ -161,47 +161,41 @@ export function Deals() {
           <GuestBlock message="Sign up to access exclusive deals from our talented sellers." />
         )}
 
-        {!isGuest && role === "seller" && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="py-4"
-          >
-            {showDealForm && sellerProducts.length > 0 && (
-              <CreateDealForm
-                sellerProducts={sellerProducts}
-                dealForm={dealForm}
-                setDealForm={setDealForm}
-                handleCreateDeal={handleCreateDeal}
-              />
-            )}
+        {!isGuest && isSeller && (
+  <motion.div
+    initial={{ opacity: 0, scale: 0.95 }}
+    animate={{ opacity: 1, scale: 1 }}
+    className="py-4"
+  >
+    {showDealForm && sellerProducts.length > 0 && (
+      <CreateDealForm
+        sellerProducts={sellerProducts}
+        dealForm={dealForm}
+        setDealForm={setDealForm}
+        handleCreateDeal={handleCreateDeal}
+      />
+    )}
 
-            {!showDealForm && (
-              <div className="text-center mb-12">
-                <p className="text-[#FFF6F8]/80">
-                  Seller accounts cannot purchase deals, but you can view and
-                  create them.
-                </p>
-              </div>
-            )}
-
-            {deals.length > 0 && (
-              <>
-                <SortBar
-                  value={sort}
-                  onChange={setSort}
-                  options={["recent", "priceLow", "priceHigh", "discount"]}
-                />
-                <div className={masonryClasses + " mt-2"}>
-                  {sortedDeals.map((deal) => (
-                    <DealCard key={deal.id} deal={deal} />
-                  ))}
-                </div>
-              </>
-            )}
-          </motion.div>
-        )}
-
+    {deals.length > 0 ? (
+      <>
+        <SortBar
+          value={sort}
+          onChange={setSort}
+          options={["recent", "priceLow", "priceHigh", "discount"]}
+        />
+        <div className={masonryClasses + " mt-2"}>
+          {sortedDeals.map((deal) => (
+            <DealCard key={deal.id} deal={deal} />
+          ))}
+        </div>
+      </>
+    ) : (
+      <div className="text-center py-20 text-[#FFF6F8]">
+        No deals available right now.
+      </div>
+    )}
+  </motion.div>
+)}
         {!isGuest && isBuyer && (
           <>
             {showDealForm && isSeller && sellerProducts.length > 0 && (
